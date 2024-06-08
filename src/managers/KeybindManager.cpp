@@ -1143,6 +1143,8 @@ SDispatchResult CKeybindManager::changeworkspace(std::string args) {
 
     updateRelativeCursorCoords();
 
+    updateRelativeCursorCoords();
+
     g_pCompositor->setActiveMonitor(PMONITORWORKSPACEOWNER);
 
     if (BISWORKSPACECURRENT) {
@@ -1172,17 +1174,18 @@ SDispatchResult CKeybindManager::changeworkspace(std::string args) {
             g_pInputManager->simulateMouseMovement();
     }
 
-    const static auto PWARPONWORKSPACECHANGE = CConfigValue<Hyprlang::INT>("cursor:warp_on_change_workspace");
+    const static auto PWARPONWORKSPACECHANGE = CConfigValue<Hyprlang::INT>("cursor:warp_on_workspace_change");
 
     if (*PWARPONWORKSPACECHANGE) {
-        auto PLAST     = pWorkspaceToChangeTo->getLastFocusedWindow();
-        auto HLSurface = CWLSurface::fromResource(g_pSeatManager->state.pointerFocus.lock());
+        Vector2D surfaceCoords;
+        PHLLS    pFoundLayerSurface;
+        auto     PLAST = pWorkspaceToChangeTo->getLastFocusedWindow();
 
-        if (PLAST && (!HLSurface || HLSurface->getWindow()))
+        if (PLAST &&
+            !g_pCompositor->vectorToLayerSurface(g_pInputManager->getMouseCoordsInternal(), &PMONITOR->m_aLayerSurfaceLayers[ZWLR_LAYER_SHELL_V1_LAYER_TOP], &surfaceCoords,
+                                                 &pFoundLayerSurface))
             PLAST->warpCursor();
     }
-
-    return {};
 }
 
 SDispatchResult CKeybindManager::fullscreenActive(std::string args) {
