@@ -94,8 +94,8 @@ void CSeatManager::setKeyboard(SP<IKeyboard> KEEB) {
 }
 
 void CSeatManager::updateActiveKeyboardData() {
-    if (keyboard && keyboard->wlr())
-        PROTO::seat->updateRepeatInfo(keyboard->wlr()->repeat_info.rate, keyboard->wlr()->repeat_info.delay);
+    if (keyboard)
+        PROTO::seat->updateRepeatInfo(keyboard->repeatRate, keyboard->repeatDelay);
     PROTO::seat->updateKeymap();
 }
 
@@ -103,7 +103,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
     if (state.keyboardFocus == surf)
         return;
 
-    if (!keyboard || !keyboard->wlr()) {
+    if (!keyboard) {
         Debug::log(ERR, "BUG THIS: setKeyboardFocus without a valid keyboard set");
         return;
     }
@@ -144,7 +144,7 @@ void CSeatManager::setKeyboardFocus(SP<CWLSurfaceResource> surf) {
                 continue;
 
             k->sendEnter(surf);
-            k->sendMods(keyboard->wlr()->modifiers.depressed, keyboard->wlr()->modifiers.latched, keyboard->wlr()->modifiers.locked, keyboard->wlr()->modifiers.group);
+            k->sendMods(keyboard->modifiersState.depressed, keyboard->modifiersState.latched, keyboard->modifiersState.locked, keyboard->modifiersState.group);
         }
     }
 
@@ -191,7 +191,12 @@ void CSeatManager::setPointerFocus(SP<CWLSurfaceResource> surf, const Vector2D& 
     if (state.pointerFocus == surf)
         return;
 
-    if (!mouse || !mouse->wlr()) {
+    if (PROTO::data->dndActive() && surf) {
+        Debug::log(LOG, "[seatmgr] Refusing pointer focus during an active dnd");
+        return;
+    }
+
+    if (!mouse) {
         Debug::log(ERR, "BUG THIS: setPointerFocus without a valid mouse set");
         return;
     }
