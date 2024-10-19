@@ -676,7 +676,7 @@ void CWLDataDeviceProtocol::abortDrag() {
     g_pSeatManager->resendEnterEvents();
 }
 
-void CWLDataDeviceProtocol::renderDND(CMonitor* pMonitor, timespec* when) {
+void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, timespec* when) {
     if (!dnd.dndSurface || !dnd.dndSurface->current.texture)
         return;
 
