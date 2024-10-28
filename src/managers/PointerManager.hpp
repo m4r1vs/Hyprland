@@ -3,15 +3,17 @@
 #include "../devices/IPointer.hpp"
 #include "../devices/ITouch.hpp"
 #include "../devices/Tablet.hpp"
-#include "../helpers/Box.hpp"
-#include "../helpers/Region.hpp"
+#include "../helpers/math/Math.hpp"
+#include "../helpers/math/Math.hpp"
 #include "../desktop/WLSurface.hpp"
+#include "../helpers/sync/SyncTimeline.hpp"
 #include <tuple>
 
 class CMonitor;
-struct wlr_input_device;
 class IHID;
 class CTexture;
+
+AQUAMARINE_FORWARD(IBuffer);
 
 /*
     The naming here is a bit confusing.
@@ -37,25 +39,31 @@ class CPointerManager {
     void move(const Vector2D& deltaLogical);
     void warpAbsolute(Vector2D abs, SP<IHID> dev);
 
-    void setCursorBuffer(wlr_buffer* buf, const Vector2D& hotspot, const float& scale);
+    void setCursorBuffer(SP<Aquamarine::IBuffer> buf, const Vector2D& hotspot, const float& scale);
     void setCursorSurface(SP<CWLSurface> buf, const Vector2D& hotspot);
     void resetCursorImage(bool apply = true);
 
-    void lockSoftwareForMonitor(SP<CMonitor> pMonitor);
-    void unlockSoftwareForMonitor(SP<CMonitor> pMonitor);
+    void lockSoftwareForMonitor(PHLMONITOR pMonitor);
+    void unlockSoftwareForMonitor(PHLMONITOR pMonitor);
     void lockSoftwareAll();
     void unlockSoftwareAll();
+    bool softwareLockedFor(PHLMONITOR pMonitor);
 
-    void renderSoftwareCursorsFor(SP<CMonitor> pMonitor, timespec* now, CRegion& damage /* logical */, std::optional<Vector2D> overridePos = {} /* monitor-local */);
+    void renderSoftwareCursorsFor(PHLMONITOR pMonitor, timespec* now, CRegion& damage /* logical */, std::optional<Vector2D> overridePos = {} /* monitor-local */);
 
     // this is needed e.g. during screensharing where
     // the software cursors aren't locked during the cursor move, but they
     // are rendered later.
-    void damageCursor(SP<CMonitor> pMonitor);
+    void damageCursor(PHLMONITOR pMonitor);
 
     //
     Vector2D position();
     Vector2D cursorSizeLogical();
+    void     storeMovement(uint64_t time, const Vector2D& delta, const Vector2D& deltaUnaccel);
+    void     setStoredMovement(uint64_t time, const Vector2D& delta, const Vector2D& deltaUnaccel);
+    void     sendStoredMovement();
+
+    void     recheckEnteredOutputs();
 
   private:
     void recheckPointerPosition();
@@ -65,19 +73,18 @@ class CPointerManager {
     void onCursorMoved();
     bool hasCursor();
     void damageIfSoftware();
-    void recheckEnteredOutputs();
 
     // closest valid point to a given one
     Vector2D closestValid(const Vector2D& pos);
 
     // returns the thing in device coordinates. Is NOT offset by the hotspot, relies on set_cursor with hotspot.
-    Vector2D getCursorPosForMonitor(SP<CMonitor> pMonitor);
+    Vector2D getCursorPosForMonitor(PHLMONITOR pMonitor);
     // returns the thing in logical coordinates of the monitor
-    CBox getCursorBoxLogicalForMonitor(SP<CMonitor> pMonitor);
+    CBox getCursorBoxLogicalForMonitor(PHLMONITOR pMonitor);
     // returns the thing in global coords
     CBox         getCursorBoxGlobal();
 
-    Vector2D     transformedHotspot(SP<CMonitor> pMonitor);
+    Vector2D     transformedHotspot(PHLMONITOR pMonitor);
 
     SP<CTexture> getCurrentCursorTexture();
 
@@ -132,48 +139,51 @@ class CPointerManager {
     } currentMonitorLayout;
 
     struct {
-        wlr_buffer*         pBuffer = nullptr;
-        SP<CTexture>        bufferTex;
-        WP<CWLSurface>      surface;
-        wlr_texture*        pBufferTexture = nullptr;
+        SP<Aquamarine::IBuffer> pBuffer;
+        SP<CTexture>            bufferTex;
+        WP<CWLSurface>          surface;
 
-        Vector2D            hotspot;
-        Vector2D            size;
-        float               scale = 1.F;
+        Vector2D                hotspot;
+        Vector2D                size;
+        float                   scale = 1.F;
 
-        CHyprSignalListener destroySurface;
-        CHyprSignalListener commitSurface;
-        DYNLISTENER(destroyBuffer);
+        CHyprSignalListener     destroySurface;
+        CHyprSignalListener     commitSurface;
+        SP<CSyncTimeline>       waitTimeline = nullptr;
+        uint64_t                waitPoint    = 0;
     } currentCursorImage; // TODO: support various sizes per-output so we can have pixel-perfect cursors
 
     Vector2D pointerPos = {0, 0};
 
+    uint64_t storedTime    = 0;
+    Vector2D storedDelta   = {0, 0};
+    Vector2D storedUnaccel = {0, 0};
+
     struct SMonitorPointerState {
-        SMonitorPointerState(SP<CMonitor> m) : monitor(m) {}
-        ~SMonitorPointerState() {
-            if (cursorFrontBuffer)
-                wlr_buffer_unlock(cursorFrontBuffer);
-        }
+        SMonitorPointerState(PHLMONITOR m) : monitor(m) {}
+        ~SMonitorPointerState() {}
 
-        WP<CMonitor> monitor;
+        PHLMONITORREF           monitor;
 
-        int          softwareLocks  = 0;
-        bool         hardwareFailed = false;
-        CBox         box; // logical
-        bool         entered   = false;
-        bool         hwApplied = false;
+        int                     softwareLocks  = 0;
+        bool                    hardwareFailed = false;
+        CBox                    box; // logical
+        bool                    entered        = false;
+        bool                    hwApplied      = false;
+        bool                    cursorRendered = false;
 
-        wlr_buffer*  cursorFrontBuffer = nullptr;
+        SP<Aquamarine::IBuffer> cursorFrontBuffer;
     };
 
     std::vector<SP<SMonitorPointerState>> monitorStates;
-    SP<SMonitorPointerState>              stateFor(SP<CMonitor> mon);
+    SP<SMonitorPointerState>              stateFor(PHLMONITOR mon);
     bool                                  attemptHardwareCursor(SP<SMonitorPointerState> state);
-    wlr_buffer*                           renderHWCursorBuffer(SP<SMonitorPointerState> state, SP<CTexture> texture);
-    bool                                  setHWCursorBuffer(SP<SMonitorPointerState> state, wlr_buffer* buf);
+    SP<Aquamarine::IBuffer>               renderHWCursorBuffer(SP<SMonitorPointerState> state, SP<CTexture> texture);
+    bool                                  setHWCursorBuffer(SP<SMonitorPointerState> state, SP<Aquamarine::IBuffer> buf);
 
     struct {
         SP<HOOK_CALLBACK_FN> monitorAdded;
+        SP<HOOK_CALLBACK_FN> monitorPreRender;
     } hooks;
 };
 

@@ -7,27 +7,47 @@
 #include "WaylandProtocol.hpp"
 #include "wlr-virtual-pointer-unstable-v1.hpp"
 #include "../helpers/signal/Signal.hpp"
+#include "../devices/IPointer.hpp"
+#include "../helpers/Monitor.hpp"
 
 class CVirtualPointerV1Resource {
   public:
-    CVirtualPointerV1Resource(SP<CZwlrVirtualPointerV1> resource_);
+    CVirtualPointerV1Resource(SP<CZwlrVirtualPointerV1> resource_, PHLMONITORREF boundOutput_);
     ~CVirtualPointerV1Resource();
 
     struct {
         CSignal destroy;
+        CSignal move;
+        CSignal warp;
+        CSignal button;
+        CSignal axis;
+        CSignal frame;
+
+        CSignal swipeBegin;
+        CSignal swipeUpdate;
+        CSignal swipeEnd;
+
+        CSignal pinchBegin;
+        CSignal pinchUpdate;
+        CSignal pinchEnd;
+
+        CSignal holdBegin;
+        CSignal holdEnd;
     } events;
 
-    bool         good();
-    wlr_pointer* wlr();
-    wl_client*   client();
+    bool          good();
+    wl_client*    client();
+
+    std::string   name;
+
+    PHLMONITORREF boundOutput;
 
   private:
-    SP<CZwlrVirtualPointerV1>             resource;
-    wlr_pointer                           pointer;
+    SP<CZwlrVirtualPointerV1>           resource;
 
-    uint32_t                              axis = 0;
+    uint32_t                            axis = 0;
 
-    std::array<wlr_pointer_axis_event, 2> axisEvents;
+    std::array<IPointer::SAxisEvent, 2> axisEvents;
 };
 
 class CVirtualPointerProtocol : public IWaylandProtocol {
@@ -43,7 +63,7 @@ class CVirtualPointerProtocol : public IWaylandProtocol {
   private:
     void onManagerResourceDestroy(wl_resource* res);
     void destroyResource(CVirtualPointerV1Resource* pointer);
-    void onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr, wl_resource* seat, uint32_t id);
+    void onCreatePointer(CZwlrVirtualPointerManagerV1* pMgr, wl_resource* seat, uint32_t id, PHLMONITORREF output);
 
     //
     std::vector<UP<CZwlrVirtualPointerManagerV1>> m_vManagers;

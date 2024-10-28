@@ -66,8 +66,8 @@ void CHyprDropShadowDecoration::damageEntire() {
         shadowRegion.subtract(CRegion(surfaceBox));
     }
 
-    for (auto& m : g_pCompositor->m_vMonitors) {
-        if (!g_pHyprRenderer->shouldRenderWindow(PWINDOW, m.get())) {
+    for (auto const& m : g_pCompositor->m_vMonitors) {
+        if (!g_pHyprRenderer->shouldRenderWindow(PWINDOW, m)) {
             const CRegion monitorRegion({m->vecPosition, m->vecSize});
             shadowRegion.subtract(monitorRegion);
         }
@@ -86,7 +86,7 @@ void CHyprDropShadowDecoration::updateWindow(PHLWINDOW pWindow) {
     m_bLastWindowBoxWithDecos = g_pDecorationPositioner->getBoxWithIncludedDecos(pWindow);
 }
 
-void CHyprDropShadowDecoration::draw(CMonitor* pMonitor, float a) {
+void CHyprDropShadowDecoration::draw(PHLMONITOR pMonitor, float a) {
 
     const auto PWINDOW = m_pWindow.lock();
 
@@ -96,13 +96,10 @@ void CHyprDropShadowDecoration::draw(CMonitor* pMonitor, float a) {
     if (PWINDOW->m_cRealShadowColor.value() == CColor(0, 0, 0, 0))
         return; // don't draw invisible shadows
 
-    if (!PWINDOW->m_sSpecialRenderData.decorate)
+    if (!PWINDOW->m_sWindowData.decorate.valueOrDefault())
         return;
 
-    if (!PWINDOW->m_sSpecialRenderData.shadow)
-        return;
-
-    if (PWINDOW->m_sAdditionalConfigData.forceNoShadow)
+    if (PWINDOW->m_sWindowData.noShadow.valueOrDefault())
         return;
 
     static auto PSHADOWS            = CConfigValue<Hyprlang::INT>("decoration:drop_shadow");
@@ -130,7 +127,7 @@ void CHyprDropShadowDecoration::draw(CMonitor* pMonitor, float a) {
     const float SHADOWSCALE = std::clamp(*PSHADOWSCALE, 0.f, 1.f);
 
     // scale the box in relation to the center of the box
-    fullBox.scaleFromCenter(SHADOWSCALE).translate(*PSHADOWOFFSET);
+    fullBox.scaleFromCenter(SHADOWSCALE).translate({(*PSHADOWOFFSET).x, (*PSHADOWOFFSET).y});
 
     updateWindow(PWINDOW);
     m_vLastWindowPos += WORKSPACEOFFSET;

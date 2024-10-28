@@ -1,8 +1,8 @@
 #ifndef NO_XWAYLAND
 
-#include "XDataSource.hpp"
 #include "XWayland.hpp"
 #include "../defines.hpp"
+#include "XDataSource.hpp"
 
 #include <fcntl.h>
 
@@ -49,10 +49,16 @@ std::vector<std::string> CXDataSource::mimes() {
 void CXDataSource::send(const std::string& mime, uint32_t fd) {
     xcb_atom_t mimeAtom = 0;
 
-    for (size_t i = 0; i < mimeTypes.size(); ++i) {
-        if (mimeTypes.at(i) == mime) {
-            mimeAtom = mimeAtoms.at(i);
-            break;
+    if (mime == "text/plain")
+        mimeAtom = HYPRATOMS["TEXT"];
+    else if (mime == "text/plain;charset=utf-8")
+        mimeAtom = HYPRATOMS["UTF8_STRING"];
+    else {
+        for (size_t i = 0; i < mimeTypes.size(); ++i) {
+            if (mimeTypes.at(i) == mime) {
+                mimeAtom = mimeAtoms.at(i);
+                break;
+            }
         }
     }
 

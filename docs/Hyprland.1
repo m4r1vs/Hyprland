@@ -10,8 +10,8 @@ Hyprland - Dynamic tiling Wayland compositor
 \f[B]Hyprland\f[R] [\f[I]arg [...]\f[R]].
 .SH DESCRIPTION
 .PP
-\f[B]Hyprland\f[R] is a dynamic tiling Wayland compositor based on
-wlroots that doesn\[aq]t sacrifice on its looks.
+\f[B]Hyprland\f[R] is an independent, highly customizable, dynamic
+tiling Wayland compositor that doesn\[aq]t sacrifice on its looks.
 .PP
 You can launch Hyprland by either going into a TTY and executing
 \f[B]Hyprland\f[R], or with a login manager.
@@ -32,6 +32,12 @@ Show command usage.
 .TP
 \f[B]-c\f[R], \f[B]--config\f[R]
 Specify config file to use.
+.TP
+\f[B]--socket\f[R]
+Sets the Wayland socket name (for Wayland socket handover)
+.TP
+\f[B]--wayland-fd\f[R]
+Sets the Wayland socket file descriptor (for Wayland socket handover)
 .SH BUGS
 .TP
 Submit bug reports and request features online at:

@@ -2,10 +2,9 @@
 
 #include <cstdint>
 #include <wayland-server-protocol.h>
-#include "../helpers/WLListener.hpp"
 #include "../macros.hpp"
 #include "../helpers/signal/Signal.hpp"
-#include "../helpers/Vector2D.hpp"
+#include "../helpers/math/Math.hpp"
 #include "../protocols/types/DataDevice.hpp"
 #include <vector>
 
@@ -128,6 +127,9 @@ class CSeatManager {
 
     void          setGrab(SP<CSeatGrab> grab); // nullptr removes
     SP<CSeatGrab> seatGrab;
+
+    bool          isPointerFrameSkipped = false;
+    bool          isPointerFrameCommit  = false;
 
   private:
     struct SSeatResourceContainer {

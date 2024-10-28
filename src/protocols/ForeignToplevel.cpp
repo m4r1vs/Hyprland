@@ -1,8 +1,6 @@
 #include "ForeignToplevel.hpp"
 #include "../Compositor.hpp"
 
-#define LOGM PROTO::foreignToplevel->protoLog
-
 CForeignToplevelHandle::CForeignToplevelHandle(SP<CExtForeignToplevelHandleV1> resource_, PHLWINDOW pWindow_) : resource(resource_), pWindow(pWindow_) {
     if (!resource_->resource())
         return;
@@ -32,9 +30,9 @@ CForeignToplevelList::CForeignToplevelList(SP<CExtForeignToplevelListV1> resourc
         LOGM(LOG, "CForeignToplevelList: finished");
     });
 
-    for (auto& w : g_pCompositor->m_vWindows) {
-        if (!w->m_bIsMapped || w->m_bFadingOut)
-            continue;
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        if (!PROTO::foreignToplevel->windowValidForForeign(w))
+            return;
 
         onMap(w);
     }
@@ -81,6 +79,7 @@ void CForeignToplevelList::onTitle(PHLWINDOW pWindow) {
         return;
 
     H->resource->sendTitle(pWindow->m_szTitle.c_str());
+    H->resource->sendDone();
 }
 
 void CForeignToplevelList::onClass(PHLWINDOW pWindow) {
@@ -92,6 +91,7 @@ void CForeignToplevelList::onClass(PHLWINDOW pWindow) {
         return;
 
     H->resource->sendAppId(pWindow->m_szClass.c_str());
+    H->resource->sendDone();
 }
 
 void CForeignToplevelList::onUnmap(PHLWINDOW pWindow) {
@@ -112,20 +112,35 @@ bool CForeignToplevelList::good() {
 
 CForeignToplevelProtocol::CForeignToplevelProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
     static auto P = g_pHookSystem->hookDynamic("openWindow", [this](void* self, SCallbackInfo& info, std::any data) {
-        for (auto& m : m_vManagers) {
-            m->onMap(std::any_cast<PHLWINDOW>(data));
+        auto window = std::any_cast<PHLWINDOW>(data);
+
+        if (!windowValidForForeign(window))
+            return;
+
+        for (auto const& m : m_vManagers) {
+            m->onMap(window);
         }
     });
 
     static auto P1 = g_pHookSystem->hookDynamic("closeWindow", [this](void* self, SCallbackInfo& info, std::any data) {
-        for (auto& m : m_vManagers) {
-            m->onUnmap(std::any_cast<PHLWINDOW>(data));
+        auto window = std::any_cast<PHLWINDOW>(data);
+
+        if (!windowValidForForeign(window))
+            return;
+
+        for (auto const& m : m_vManagers) {
+            m->onUnmap(window);
         }
     });
 
     static auto P2 = g_pHookSystem->hookDynamic("windowTitle", [this](void* self, SCallbackInfo& info, std::any data) {
-        for (auto& m : m_vManagers) {
-            m->onTitle(std::any_cast<PHLWINDOW>(data));
+        auto window = std::any_cast<PHLWINDOW>(data);
+
+        if (!windowValidForForeign(window))
+            return;
+
+        for (auto const& m : m_vManagers) {
+            m->onTitle(window);
         }
     });
 }
@@ -147,4 +162,8 @@ void CForeignToplevelProtocol::onManagerResourceDestroy(CForeignToplevelList* mg
 
 void CForeignToplevelProtocol::destroyHandle(CForeignToplevelHandle* handle) {
     std::erase_if(m_vHandles, [&](const auto& other) { return other.get() == handle; });
+}
+
+bool CForeignToplevelProtocol::windowValidForForeign(PHLWINDOW pWindow) {
+    return validMapped(pWindow) && !pWindow->isX11OverrideRedirect();
 }

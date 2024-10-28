@@ -2,7 +2,7 @@
 
 #include <any>
 #include "../../defines.hpp"
-#include "../../helpers/Region.hpp"
+#include "../../helpers/math/Math.hpp"
 #include "DecorationPositioner.hpp"
 
 enum eDecorationType {
@@ -39,7 +39,7 @@ class IHyprWindowDecoration {
 
     virtual void                       onPositioningReply(const SDecorationPositioningReply& reply) = 0;
 
-    virtual void                       draw(CMonitor*, float a) = 0;
+    virtual void                       draw(PHLMONITOR, float a) = 0;
 
     virtual eDecorationType            getDecorationType() = 0;
 

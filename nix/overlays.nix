@@ -3,13 +3,12 @@
   lib,
   inputs,
 }: let
-  props = builtins.fromJSON (builtins.readFile ../props.json);
-
   mkDate = longDate: (lib.concatStringsSep "-" [
     (builtins.substring 0 4 longDate)
     (builtins.substring 4 2 longDate)
     (builtins.substring 6 2 longDate)
   ]);
+  version = lib.removeSuffix "\n" (builtins.readFile ../VERSION);
 in {
   # Contains what a user is most likely to care about:
   # Hyprland itself, XDPH and the Share Picker.
@@ -21,20 +20,23 @@ in {
   # Packages for variations of Hyprland, dependencies included.
   hyprland-packages = lib.composeManyExtensions [
     # Dependencies
+    inputs.aquamarine.overlays.default
     inputs.hyprcursor.overlays.default
+    inputs.hyprland-protocols.overlays.default
     inputs.hyprlang.overlays.default
     inputs.hyprutils.overlays.default
     inputs.hyprwayland-scanner.overlays.default
-    self.overlays.xwayland
+    self.overlays.udis86
 
     # Hyprland packages themselves
-    (final: prev: let
+    (final: _prev: let
       date = mkDate (self.lastModifiedDate or "19700101");
     in {
       hyprland = final.callPackage ./default.nix {
-        stdenv = final.gcc13Stdenv;
-        version = "${props.version}+date=${date}_${self.shortRev or "dirty"}";
+        stdenv = final.gcc14Stdenv;
+        version = "${version}+date=${date}_${self.shortRev or "dirty"}";
         commit = self.rev or "";
+        revCount = self.sourceInfo.revCount or "";
         inherit date;
       };
       hyprland-unwrapped = final.hyprland.override {wrapRuntimeDeps = false;};
@@ -64,13 +66,19 @@ in {
     inputs.xdph.overlays.xdg-desktop-portal-hyprland
   ];
 
-  # Patches XWayland's pkgconfig file to not include Cflags or includedir
-  # The above two variables trip up CMake and the build fails
-  xwayland = final: prev: {
-    xwayland = prev.xwayland.overrideAttrs (old: {
-      postInstall = ''
-        sed -i '/includedir/d' $out/lib/pkgconfig/xwayland.pc
-      '';
+  # udis86 from nixpkgs is too old, and also does not provide a .pc file
+  # this version is the one used in the git submodule, and allows us to
+  # fetch the source without '?submodules=1'
+  udis86 = final: prev: {
+    udis86-hyprland = prev.udis86.overrideAttrs (_self: _super: {
+      src = final.fetchFromGitHub {
+        owner = "canihavesomecoffee";
+        repo = "udis86";
+        rev = "5336633af70f3917760a6d441ff02d93477b0c86";
+        hash = "sha256-HifdUQPGsKQKQprByeIznvRLONdOXeolOsU5nkwIv3g=";
+      };
+
+      patches = [];
     });
   };
 }

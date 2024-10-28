@@ -2,6 +2,9 @@
 #include <vector>
 #include "../includes.hpp"
 #include "debug/Log.hpp"
+#include "../macros.hpp"
+#include <xf86drm.h>
+#include <drm_fourcc.h>
 
 /*
     DRM formats are LE, while OGL is BE. The two primary formats
@@ -11,18 +14,26 @@
 */
 inline const std::vector<SPixelFormat> GLES3_FORMATS = {
     {
-        .drmFormat     = DRM_FORMAT_ARGB8888,
-        .flipRB        = true,
-        .glFormat      = GL_RGBA,
+        .drmFormat = DRM_FORMAT_ARGB8888,
+        .flipRB    = true,
+#ifndef GLES2
+        .glFormat = GL_RGBA,
+#else
+        .glFormat = GL_BGRA_EXT,
+#endif
         .glType        = GL_UNSIGNED_BYTE,
         .withAlpha     = true,
         .alphaStripped = DRM_FORMAT_XRGB8888,
         .bytesPerBlock = 4,
     },
     {
-        .drmFormat     = DRM_FORMAT_XRGB8888,
-        .flipRB        = true,
-        .glFormat      = GL_RGBA,
+        .drmFormat = DRM_FORMAT_XRGB8888,
+        .flipRB    = true,
+#ifndef GLES2
+        .glFormat = GL_RGBA,
+#else
+        .glFormat = GL_BGRA_EXT,
+#endif
         .glType        = GL_UNSIGNED_BYTE,
         .withAlpha     = false,
         .alphaStripped = DRM_FORMAT_XRGB8888,
@@ -241,7 +252,7 @@ DRMFormat FormatUtils::shmToDRM(SHMFormat shm) {
 }
 
 const SPixelFormat* FormatUtils::getPixelFormatFromDRM(DRMFormat drm) {
-    for (auto& fmt : GLES3_FORMATS) {
+    for (auto const& fmt : GLES3_FORMATS) {
         if (fmt.drmFormat == drm)
             return &fmt;
     }
@@ -250,7 +261,7 @@ const SPixelFormat* FormatUtils::getPixelFormatFromDRM(DRMFormat drm) {
 }
 
 const SPixelFormat* FormatUtils::getPixelFormatFromGL(uint32_t glFormat, uint32_t glType, bool alpha) {
-    for (auto& fmt : GLES3_FORMATS) {
+    for (auto const& fmt : GLES3_FORMATS) {
         if (fmt.glFormat == (int)glFormat && fmt.glType == (int)glType && fmt.withAlpha == alpha)
             return &fmt;
     }
@@ -299,4 +310,18 @@ uint32_t FormatUtils::glFormatToType(uint32_t gl) {
         GL_UNSIGNED_INT_2_10_10_10_REV :
 #endif
         GL_UNSIGNED_BYTE;
+}
+
+std::string FormatUtils::drmFormatName(DRMFormat drm) {
+    auto        n    = drmGetFormatName(drm);
+    std::string name = n;
+    free(n);
+    return name;
+}
+
+std::string FormatUtils::drmModifierName(uint64_t mod) {
+    auto        n    = drmGetFormatModifierName(mod);
+    std::string name = n;
+    free(n);
+    return name;
 }

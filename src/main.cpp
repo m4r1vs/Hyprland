@@ -3,7 +3,14 @@
 #include "Compositor.hpp"
 #include "config/ConfigManager.hpp"
 #include "init/initHelpers.hpp"
+#include "debug/HyprCtl.hpp"
 
+#include <cstdio>
+#include <hyprutils/string/String.hpp>
+#include <print>
+using namespace Hyprutils::String;
+
+#include <fcntl.h>
 #include <iostream>
 #include <iterator>
 #include <vector>
@@ -12,11 +19,15 @@
 #include <filesystem>
 
 void help() {
-    std::cout << "usage: Hyprland [arg [...]].\n";
-    std::cout << "\nArguments:\n";
-    std::cout << "  --help              -h       - Show this message again\n";
-    std::cout << "  --config FILE       -c FILE  - Specify config file to use\n";
-    std::cout << "  --i-am-really-stupid         - Omits root user privileges check (why would you do that?)\n";
+    std::println("usage: Hyprland [arg [...]].\n");
+    std::println(R"(Arguments:
+    --help              -h       - Show this message again
+    --config FILE       -c FILE  - Specify config file to use
+    --socket NAME                - Sets the Wayland socket name (for Wayland socket handover)
+    --wayland-fd FD              - Sets the Wayland socket fd (for Wayland socket handover)
+    --systeminfo                 - Prints system infos
+    --i-am-really-stupid         - Omits root user privileges check (why would you do that?)
+    --version           -v       - Print this binary's version)");
 }
 
 int main(int argc, char** argv) {
@@ -25,27 +36,58 @@ int main(int argc, char** argv) {
         throwError("XDG_RUNTIME_DIR is not set!");
 
     // export HYPRLAND_CMD
-    std::string cmd = "";
-    for (auto i = 0; i < argc; ++i)
-        cmd += std::string(i == 0 ? "" : " ") + argv[i];
+    std::string cmd = argv[0];
+    for (int i = 1; i < argc; ++i)
+        cmd += std::string(" ") + argv[i];
 
     setenv("HYPRLAND_CMD", cmd.c_str(), 1);
     setenv("XDG_BACKEND", "wayland", 1);
     setenv("_JAVA_AWT_WM_NONREPARENTING", "1", 1);
     setenv("MOZ_ENABLE_WAYLAND", "1", 1);
-    setenv("XDG_CURRENT_DESKTOP", "Hyprland", 1);
 
     // parse some args
     std::string              configPath;
+    std::string              socketName;
+    int                      socketFd   = -1;
     bool                     ignoreSudo = false;
 
     std::vector<std::string> args{argv + 1, argv + argc};
 
     for (auto it = args.begin(); it != args.end(); it++) {
         if (it->compare("--i-am-really-stupid") == 0 && !ignoreSudo) {
-            std::cout << "[ WARNING ] Running Hyprland with superuser privileges might damage your system\n";
+            std::println("[ WARNING ] Running Hyprland with superuser privileges might damage your system");
 
             ignoreSudo = true;
+        } else if (it->compare("--socket") == 0) {
+            if (std::next(it) == args.end()) {
+                help();
+
+                return 1;
+            }
+
+            socketName = *std::next(it);
+            it++;
+        } else if (it->compare("--wayland-fd") == 0) {
+            if (std::next(it) == args.end()) {
+                help();
+
+                return 1;
+            }
+
+            try {
+                socketFd = std::stoi(std::next(it)->c_str());
+
+                // check if socketFd is a valid file descriptor
+                if (fcntl(socketFd, F_GETFD) == -1)
+                    throw std::exception();
+            } catch (...) {
+                std::println(stderr, "[ ERROR ] Invalid Wayland FD!");
+                help();
+
+                return 1;
+            }
+
+            it++;
         } else if (it->compare("-c") == 0 || it->compare("--config") == 0) {
             if (std::next(it) == args.end()) {
                 help();
@@ -61,7 +103,7 @@ int main(int argc, char** argv) {
                     throw std::exception();
                 }
             } catch (...) {
-                std::cerr << "[ ERROR ] Config file '" << configPath << "' doesn't exist!\n";
+                std::println(stderr, "[ ERROR ] Config file '{}' doesn't exist!", configPath);
                 help();
 
                 return 1;
@@ -76,8 +118,14 @@ int main(int argc, char** argv) {
             help();
 
             return 0;
+        } else if (it->compare("-v") == 0 || it->compare("--version") == 0) {
+            std::println("{}", versionRequest(eHyprCtlOutputFormat::FORMAT_NORMAL, ""));
+            return 0;
+        } else if (it->compare("--systeminfo") == 0) {
+            std::println("{}", systemInfoRequest(eHyprCtlOutputFormat::FORMAT_NORMAL, ""));
+            return 0;
         } else {
-            std::cerr << "[ ERROR ] Unknown option '" << it->c_str() << "'!\n";
+            std::println(stderr, "[ ERROR ] Unknown option '{}' !", it->c_str());
             help();
 
             return 1;
@@ -85,27 +133,36 @@ int main(int argc, char** argv) {
     }
 
     if (!ignoreSudo && Init::isSudo()) {
-        std::cerr << "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n";
-        std::cerr << "          Hint: Use the --i-am-really-stupid flag to omit that check.\n";
+        std::println(stderr,
+                     "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n"
+                     "          Hint: Use the --i-am-really-stupid flag to omit that check.");
 
         return 1;
     } else if (ignoreSudo && Init::isSudo()) {
-        std::cout << "Superuser privileges check is omitted. I hope you know what you're doing.\n";
+        std::println("Superuser privileges check is omitted. I hope you know what you're doing.");
     }
 
-    std::cout << "Welcome to Hyprland!\n";
+    if (socketName.empty() ^ (socketFd == -1)) {
+        std::println(stderr,
+                     "[ ERROR ] Hyprland was launched with only one of --socket and --wayland-fd.\n"
+                     "          Hint: Pass both --socket and --wayland-fd to perform Wayland socket handover.");
+
+        return 1;
+    }
+
+    std::println("Welcome to Hyprland!");
 
     // let's init the compositor.
     // it initializes basic Wayland stuff in the constructor.
     try {
         g_pCompositor                     = std::make_unique<CCompositor>();
         g_pCompositor->explicitConfigPath = configPath;
-    } catch (std::exception& e) {
-        std::cout << "Hyprland threw in ctor: " << e.what() << "\nCannot continue.\n";
+    } catch (const std::exception& e) {
+        std::println(stderr, "Hyprland threw in ctor: {}\nCannot continue.", e.what());
         return 1;
     }
 
-    g_pCompositor->initServer();
+    g_pCompositor->initServer(socketName, socketFd);
 
     if (!envEnabled("HYPRLAND_NO_RT"))
         Init::gainRealTime();
@@ -115,11 +172,9 @@ int main(int argc, char** argv) {
     // If all's good to go, start.
     g_pCompositor->startCompositor();
 
-    g_pCompositor->m_bIsShuttingDown = true;
+    g_pCompositor->cleanup();
 
-    // If we are here it means we got yote.
-    Debug::log(LOG, "Hyprland reached the end.");
-    g_pCompositor.reset();
+    Debug::log(LOG, "Hyprland has reached the end.");
 
     return EXIT_SUCCESS;
 }

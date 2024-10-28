@@ -7,7 +7,8 @@
 #include "wayland.hpp"
 #include "../../helpers/signal/Signal.hpp"
 
-class IWLBuffer;
+class IHLBuffer;
+class CWLSurfaceResource;
 
 class CWLBufferResource {
   public:
@@ -18,7 +19,7 @@ class CWLBufferResource {
     void                         sendRelease();
     wl_resource*                 getResource();
 
-    WP<IWLBuffer>                buffer;
+    WP<IHLBuffer>                buffer;
 
     WP<CWLBufferResource>        self;
 
@@ -27,5 +28,5 @@ class CWLBufferResource {
 
     SP<CWlBuffer> resource;
 
-    friend class IWLBuffer;
+    friend class IHLBuffer;
 };

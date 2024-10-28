@@ -3,8 +3,8 @@
 #include "../helpers/Monitor.hpp"
 #include "../managers/HookSystemManager.hpp"
 #include "core/Compositor.hpp"
-
-#define LOGM PROTO::presentation->protoLog
+#include "core/Output.hpp"
+#include <aquamarine/output/Output.hpp>
 
 CQueuedPresentationData::CQueuedPresentationData(SP<CWLSurfaceResource> surf) : surface(surf) {
     ;
@@ -14,7 +14,7 @@ void CQueuedPresentationData::setPresentationType(bool zeroCopy_) {
     zeroCopy = zeroCopy_;
 }
 
-void CQueuedPresentationData::attachMonitor(CMonitor* pMonitor_) {
+void CQueuedPresentationData::attachMonitor(PHLMONITOR pMonitor_) {
     pMonitor = pMonitor_;
 }
 
@@ -41,13 +41,11 @@ bool CPresentationFeedback::good() {
 }
 
 void CPresentationFeedback::sendQueued(SP<CQueuedPresentationData> data, timespec* when, uint32_t untilRefreshNs, uint64_t seq, uint32_t reportedFlags) {
-    auto         client = resource->client();
-    wl_resource* res;
-    wl_resource_for_each(res, &data->pMonitor->output->resources) {
-        if (client == wl_resource_get_client(res)) {
-            resource->sendSyncOutput(res);
-            break;
-        }
+    auto client = resource->client();
+
+    if (PROTO::outputs.contains(data->pMonitor->szName)) {
+        if (auto outputResource = PROTO::outputs.at(data->pMonitor->szName)->outputResourceFrom(client); outputResource)
+            resource->sendSyncOutput(outputResource->getResource()->resource());
     }
 
     uint32_t flags = 0;
@@ -55,21 +53,27 @@ void CPresentationFeedback::sendQueued(SP<CQueuedPresentationData> data, timespe
         flags |= WP_PRESENTATION_FEEDBACK_KIND_VSYNC;
     if (data->zeroCopy)
         flags |= WP_PRESENTATION_FEEDBACK_KIND_ZERO_COPY;
-    if (reportedFlags & WLR_OUTPUT_PRESENT_HW_CLOCK)
+    if (reportedFlags & Aquamarine::IOutput::AQ_OUTPUT_PRESENT_HW_CLOCK)
         flags |= WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK;
-    if (reportedFlags & WLR_OUTPUT_PRESENT_HW_COMPLETION)
+    if (reportedFlags & Aquamarine::IOutput::AQ_OUTPUT_PRESENT_HW_COMPLETION)
         flags |= WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
 
+    time_t tv_sec = 0;
+    if (sizeof(time_t) > 4)
+        tv_sec = when->tv_sec >> 32;
+
     if (data->wasPresented)
-        resource->sendPresented((uint32_t)(when->tv_sec >> 32), (uint32_t)(when->tv_sec & 0xFFFFFFFF), (uint32_t)(when->tv_nsec), untilRefreshNs, (uint32_t)(seq >> 32),
+        resource->sendPresented((uint32_t)tv_sec, (uint32_t)(when->tv_sec & 0xFFFFFFFF), (uint32_t)(when->tv_nsec), untilRefreshNs, (uint32_t)(seq >> 32),
                                 (uint32_t)(seq & 0xFFFFFFFF), (wpPresentationFeedbackKind)flags);
     else
         resource->sendDiscarded();
+
+    done = true;
 }
 
 CPresentationProtocol::CPresentationProtocol(const wl_interface* iface, const int& ver, const std::string& name) : IWaylandProtocol(iface, ver, name) {
     static auto P = g_pHookSystem->hookDynamic("monitorRemoved", [this](void* self, SCallbackInfo& info, std::any param) {
-        const auto PMONITOR = std::any_cast<CMonitor*>(param);
+        const auto PMONITOR = PHLMONITORREF{std::any_cast<PHLMONITOR>(param)};
         std::erase_if(m_vQueue, [PMONITOR](const auto& other) { return !other->surface || other->pMonitor == PMONITOR; });
     });
 }
@@ -103,13 +107,21 @@ void CPresentationProtocol::onGetFeedback(CWpPresentation* pMgr, wl_resource* su
     }
 }
 
-void CPresentationProtocol::onPresented(CMonitor* pMonitor, timespec* when, uint32_t untilRefreshNs, uint64_t seq, uint32_t reportedFlags) {
-    for (auto& feedback : m_vFeedbacks) {
+void CPresentationProtocol::onPresented(PHLMONITOR pMonitor, timespec* when, uint32_t untilRefreshNs, uint64_t seq, uint32_t reportedFlags) {
+    timespec  now;
+    timespec* presentedAt = when;
+    if (!presentedAt) {
+        // just put the current time, we don't have anything better
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        when = &now;
+    }
+
+    for (auto const& feedback : m_vFeedbacks) {
         if (!feedback->surface)
             continue;
 
-        for (auto& data : m_vQueue) {
-            if (!data->surface || data->surface != feedback->surface)
+        for (auto const& data : m_vQueue) {
+            if (!data->surface || data->surface != feedback->surface || (data->pMonitor && data->pMonitor != pMonitor))
                 continue;
 
             feedback->sendQueued(data, when, untilRefreshNs, seq, reportedFlags);
@@ -119,7 +131,7 @@ void CPresentationProtocol::onPresented(CMonitor* pMonitor, timespec* when, uint
     }
 
     std::erase_if(m_vFeedbacks, [](const auto& other) { return !other->surface || other->done; });
-    std::erase_if(m_vQueue, [pMonitor](const auto& other) { return !other->surface || other->pMonitor == pMonitor || !other->pMonitor; });
+    std::erase_if(m_vQueue, [pMonitor](const auto& other) { return !other->surface || other->pMonitor == pMonitor || !other->pMonitor || other->done; });
 }
 
 void CPresentationProtocol::queueData(SP<CQueuedPresentationData> data) {

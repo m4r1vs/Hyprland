@@ -1,41 +1,45 @@
 #include "Buffer.hpp"
-#include "WLBuffer.hpp"
 
-SDMABUFAttrs IWLBuffer::dmabuf() {
-    return SDMABUFAttrs{};
-}
-
-SSHMAttrs IWLBuffer::shm() {
-    return SSHMAttrs{};
-}
-
-std::tuple<uint8_t*, uint32_t, size_t> IWLBuffer::beginDataPtr(uint32_t flags) {
-    return {nullptr, 0, 0};
-}
-
-void IWLBuffer::endDataPtr() {
-    ; // empty
-}
-
-void IWLBuffer::sendRelease() {
-    if (!resource || !resource->resource)
-        return;
-    resource->resource->sendRelease();
-}
-
-void IWLBuffer::lock() {
-    locks++;
-}
-
-void IWLBuffer::unlock() {
-    locks--;
-
-    ASSERT(locks >= 0);
-
-    if (locks <= 0)
+IHLBuffer::~IHLBuffer() {
+    if (locked() && resource)
         sendRelease();
 }
 
-bool IWLBuffer::locked() {
-    return locks;
+void IHLBuffer::sendRelease() {
+    resource->sendRelease();
+}
+
+void IHLBuffer::lock() {
+    nLocks++;
+}
+
+void IHLBuffer::unlock() {
+    nLocks--;
+
+    ASSERT(nLocks >= 0);
+
+    if (nLocks == 0)
+        sendRelease();
+}
+
+bool IHLBuffer::locked() {
+    return nLocks > 0;
+}
+
+void IHLBuffer::unlockOnBufferRelease(WP<CWLSurfaceResource> surf) {
+    hlEvents.backendRelease = events.backendRelease.registerListener([this](std::any data) {
+        unlock();
+        hlEvents.backendRelease.reset();
+    });
+}
+
+CHLBufferReference::CHLBufferReference(SP<IHLBuffer> buffer_, SP<CWLSurfaceResource> surface_) : buffer(buffer_), surface(surface_) {
+    buffer->lock();
+}
+
+CHLBufferReference::~CHLBufferReference() {
+    if (buffer.expired())
+        return;
+
+    buffer->unlock();
 }

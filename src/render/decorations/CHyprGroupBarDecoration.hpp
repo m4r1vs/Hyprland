@@ -31,7 +31,7 @@ class CHyprGroupBarDecoration : public IHyprWindowDecoration {
 
     virtual void                       onPositioningReply(const SDecorationPositioningReply& reply);
 
-    virtual void                       draw(CMonitor*, float a);
+    virtual void                       draw(PHLMONITOR, float a);
 
     virtual eDecorationType            getDecorationType();
 
@@ -48,7 +48,7 @@ class CHyprGroupBarDecoration : public IHyprWindowDecoration {
     virtual std::string                getDisplayName();
 
   private:
-    SWindowDecorationExtents m_seExtents;
+    SBoxExtents              m_seExtents;
 
     CBox                     m_bAssignedBox = {0};
 

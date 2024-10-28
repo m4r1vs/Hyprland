@@ -8,9 +8,12 @@
 #include <memory>
 #include <xf86drmMode.h>
 #include "Timer.hpp"
-#include "Region.hpp"
+#include "math/Math.hpp"
 #include <optional>
 #include "signal/Signal.hpp"
+#include "DamageRing.hpp"
+#include <aquamarine/output/Output.hpp>
+#include <aquamarine/allocator/Swapchain.hpp>
 
 // Enum for the different types of auto directions, e.g. auto-left, auto-up.
 enum eAutoDirs {
@@ -37,92 +40,106 @@ struct SMonitorRule {
 };
 
 class CMonitor;
+class CSyncTimeline;
 
-// Class for wrapping the wlr state
 class CMonitorState {
   public:
     CMonitorState(CMonitor* owner);
     ~CMonitorState();
 
-    wlr_output_state* wlr();
-    void              clear();
-    // commit() will also clear()
     bool commit();
     bool test();
+    bool updateSwapchain();
 
   private:
-    wlr_output_state m_state = {0};
-    CMonitor*        m_pOwner;
+    void      ensureBufferPresent();
+
+    CMonitor* m_pOwner = nullptr;
 };
 
 class CMonitor {
   public:
-    CMonitor();
+    CMonitor(SP<Aquamarine::IOutput> output);
     ~CMonitor();
 
-    Vector2D        vecPosition         = Vector2D(-1, -1); // means unset
-    Vector2D        vecXWaylandPosition = Vector2D(-1, -1); // means unset
-    Vector2D        vecSize             = Vector2D(0, 0);
-    Vector2D        vecPixelSize        = Vector2D(0, 0);
-    Vector2D        vecTransformedSize  = Vector2D(0, 0);
+    Vector2D                    vecPosition         = Vector2D(-1, -1); // means unset
+    Vector2D                    vecXWaylandPosition = Vector2D(-1, -1); // means unset
+    Vector2D                    vecSize             = Vector2D(0, 0);
+    Vector2D                    vecPixelSize        = Vector2D(0, 0);
+    Vector2D                    vecTransformedSize  = Vector2D(0, 0);
 
-    bool            primary = false;
+    bool                        primary = false;
 
-    uint64_t        ID                     = -1;
-    PHLWORKSPACE    activeWorkspace        = nullptr;
-    PHLWORKSPACE    activeSpecialWorkspace = nullptr;
-    float           setScale               = 1; // scale set by cfg
-    float           scale                  = 1; // real scale
+    MONITORID                   ID                     = MONITOR_INVALID;
+    PHLWORKSPACE                activeWorkspace        = nullptr;
+    PHLWORKSPACE                activeSpecialWorkspace = nullptr;
+    float                       setScale               = 1; // scale set by cfg
+    float                       scale                  = 1; // real scale
 
-    std::string     szName             = "";
-    std::string     szDescription      = "";
-    std::string     szShortDescription = "";
+    std::string                 szName             = "";
+    std::string                 szDescription      = "";
+    std::string                 szShortDescription = "";
 
-    Vector2D        vecReservedTopLeft     = Vector2D(0, 0);
-    Vector2D        vecReservedBottomRight = Vector2D(0, 0);
+    Vector2D                    vecReservedTopLeft     = Vector2D(0, 0);
+    Vector2D                    vecReservedBottomRight = Vector2D(0, 0);
 
-    drmModeModeInfo customDrmMode = {};
+    drmModeModeInfo             customDrmMode = {};
 
-    CMonitorState   state;
+    CMonitorState               state;
+    CDamageRing                 damage;
 
-    // WLR stuff
-    wlr_damage_ring         damage;
-    wlr_output*             output          = nullptr;
-    float                   refreshRate     = 60;
-    int                     framesToSkip    = 0;
-    int                     forceFullFrames = 0;
-    bool                    noFrameSchedule = false;
-    bool                    scheduledRecalc = false;
-    wl_output_transform     transform       = WL_OUTPUT_TRANSFORM_NORMAL;
-    float                   xwaylandScale   = 1.f;
-    std::array<float, 9>    projMatrix      = {0};
-    std::optional<Vector2D> forceSize;
-    wlr_output_mode*        currentMode = nullptr;
+    SP<Aquamarine::IOutput>     output;
+    float                       refreshRate     = 60;
+    int                         framesToSkip    = 0;
+    int                         forceFullFrames = 0;
+    bool                        noFrameSchedule = false;
+    bool                        scheduledRecalc = false;
+    wl_output_transform         transform       = WL_OUTPUT_TRANSFORM_NORMAL;
+    float                       xwaylandScale   = 1.f;
+    Mat3x3                      projMatrix;
+    std::optional<Vector2D>     forceSize;
+    SP<Aquamarine::SOutputMode> currentMode;
+    SP<Aquamarine::CSwapchain>  cursorSwapchain;
+    uint32_t                    drmFormat     = DRM_FORMAT_INVALID;
+    uint32_t                    prevDrmFormat = DRM_FORMAT_INVALID;
 
-    bool                    dpmsStatus       = true;
-    bool                    vrrActive        = false; // this can be TRUE even if VRR is not active in the case that this display does not support it.
-    bool                    enabled10bit     = false; // as above, this can be TRUE even if 10 bit failed.
-    bool                    createdByUser    = false;
-    uint32_t                drmFormat        = DRM_FORMAT_INVALID;
-    bool                    isUnsafeFallback = false;
+    bool                        dpmsStatus       = true;
+    bool                        vrrActive        = false; // this can be TRUE even if VRR is not active in the case that this display does not support it.
+    bool                        enabled10bit     = false; // as above, this can be TRUE even if 10 bit failed.
+    bool                        createdByUser    = false;
+    bool                        isUnsafeFallback = false;
 
-    bool                    pendingFrame    = false; // if we schedule a frame during rendering, reschedule it after
-    bool                    renderingActive = false;
+    bool                        pendingFrame    = false; // if we schedule a frame during rendering, reschedule it after
+    bool                        renderingActive = false;
 
-    wl_event_source*        renderTimer  = nullptr; // for RAT
-    bool                    RATScheduled = false;
-    CTimer                  lastPresentationTimer;
+    wl_event_source*            renderTimer  = nullptr; // for RAT
+    bool                        RATScheduled = false;
+    CTimer                      lastPresentationTimer;
 
-    SMonitorRule            activeMonitorRule;
+    bool                        isBeingLeased = false;
 
-    WP<CMonitor>            self;
+    SMonitorRule                activeMonitorRule;
+
+    // explicit sync
+    SP<CSyncTimeline> inTimeline;
+    SP<CSyncTimeline> outTimeline;
+    uint64_t          commitSeq = 0;
+
+    PHLMONITORREF     self;
 
     // mirroring
-    CMonitor*              pMirrorOf = nullptr;
-    std::vector<CMonitor*> mirrors;
+    PHLMONITORREF              pMirrorOf;
+    std::vector<PHLMONITORREF> mirrors;
+
+    // ctm
+    Mat3x3 ctm        = Mat3x3::identity();
+    bool   ctmUpdated = false;
 
     // for tearing
     PHLWINDOWREF solitaryClient;
+
+    // for direct scanout
+    PHLWINDOWREF lastScanout;
 
     struct {
         bool canTear         = false;
@@ -143,38 +160,36 @@ class CMonitor {
 
     std::array<std::vector<PHLLSREF>, 4> m_aLayerSurfaceLayers;
 
-    DYNLISTENER(monitorFrame);
-    DYNLISTENER(monitorDestroy);
-    DYNLISTENER(monitorStateRequest);
-    DYNLISTENER(monitorDamage);
-    DYNLISTENER(monitorNeedsFrame);
-    DYNLISTENER(monitorCommit);
-    DYNLISTENER(monitorBind);
-    DYNLISTENER(monitorPresented);
-
     // methods
-    void     onConnect(bool noRule);
-    void     onDisconnect(bool destroy = false);
-    void     addDamage(const pixman_region32_t* rg);
-    void     addDamage(const CRegion* rg);
-    void     addDamage(const CBox* box);
-    void     setMirror(const std::string&);
-    bool     isMirror();
-    bool     matchesStaticSelector(const std::string& selector) const;
-    float    getDefaultScale();
-    void     changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal = false, bool noMouseMove = false, bool noFocus = false);
-    void     changeWorkspace(const int& id, bool internal = false, bool noMouseMove = false, bool noFocus = false);
-    void     setSpecialWorkspace(const PHLWORKSPACE& pWorkspace);
-    void     setSpecialWorkspace(const int& id);
-    void     moveTo(const Vector2D& pos);
-    Vector2D middle();
-    void     updateMatrix();
-    int64_t  activeWorkspaceID();
-    int64_t  activeSpecialWorkspaceID();
-    CBox     logicalBox();
+    void        onConnect(bool noRule);
+    void        onDisconnect(bool destroy = false);
+    void        addDamage(const pixman_region32_t* rg);
+    void        addDamage(const CRegion* rg);
+    void        addDamage(const CBox* box);
+    bool        shouldSkipScheduleFrameOnMouseEvent();
+    void        setMirror(const std::string&);
+    bool        isMirror();
+    bool        matchesStaticSelector(const std::string& selector) const;
+    float       getDefaultScale();
+    void        changeWorkspace(const PHLWORKSPACE& pWorkspace, bool internal = false, bool noMouseMove = false, bool noFocus = false);
+    void        changeWorkspace(const WORKSPACEID& id, bool internal = false, bool noMouseMove = false, bool noFocus = false);
+    void        setSpecialWorkspace(const PHLWORKSPACE& pWorkspace);
+    void        setSpecialWorkspace(const WORKSPACEID& id);
+    void        moveTo(const Vector2D& pos);
+    Vector2D    middle();
+    void        updateMatrix();
+    WORKSPACEID activeWorkspaceID();
+    WORKSPACEID activeSpecialWorkspaceID();
+    CBox        logicalBox();
+    void        scheduleDone();
+    bool        attemptDirectScanout();
+    void        setCTM(const Mat3x3& ctm);
 
-    bool     m_bEnabled             = false;
-    bool     m_bRenderingInitPassed = false;
+    void        debugLastPresentation(const std::string& message);
+    void        onMonitorFrame();
+
+    bool        m_bEnabled             = false;
+    bool        m_bRenderingInitPassed = false;
 
     // For the list lookup
 
@@ -183,6 +198,17 @@ class CMonitor {
     }
 
   private:
-    void setupDefaultWS(const SMonitorRule&);
-    int  findAvailableDefaultWS();
+    void        setupDefaultWS(const SMonitorRule&);
+    WORKSPACEID findAvailableDefaultWS();
+
+    bool        doneScheduled = false;
+
+    struct {
+        CHyprSignalListener frame;
+        CHyprSignalListener destroy;
+        CHyprSignalListener state;
+        CHyprSignalListener needsFrame;
+        CHyprSignalListener presented;
+        CHyprSignalListener commit;
+    } listeners;
 };

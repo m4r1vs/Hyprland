@@ -1,5 +1,7 @@
 #include "ProtocolManager.hpp"
 
+#include "../config/ConfigValue.hpp"
+
 #include "../protocols/TearingControl.hpp"
 #include "../protocols/FractionalScale.hpp"
 #include "../protocols/XDGOutput.hpp"
@@ -35,6 +37,16 @@
 #include "../protocols/Viewporter.hpp"
 #include "../protocols/MesaDRM.hpp"
 #include "../protocols/LinuxDMABUF.hpp"
+#include "../protocols/DRMLease.hpp"
+#include "../protocols/DRMSyncobj.hpp"
+#include "../protocols/Screencopy.hpp"
+#include "../protocols/ToplevelExport.hpp"
+#include "../protocols/TextInputV1.hpp"
+#include "../protocols/GlobalShortcuts.hpp"
+#include "../protocols/XDGDialog.hpp"
+#include "../protocols/SinglePixel.hpp"
+#include "../protocols/SecurityContext.hpp"
+#include "../protocols/CTMControl.hpp"
 
 #include "../protocols/core/Seat.hpp"
 #include "../protocols/core/DataDevice.hpp"
@@ -45,8 +57,12 @@
 
 #include "../helpers/Monitor.hpp"
 #include "../render/Renderer.hpp"
+#include "../Compositor.hpp"
 
-void CProtocolManager::onMonitorModeChange(CMonitor* pMonitor) {
+#include <aquamarine/buffer/Buffer.hpp>
+#include <aquamarine/backend/Backend.hpp>
+
+void CProtocolManager::onMonitorModeChange(PHLMONITOR pMonitor) {
     const bool ISMIRROR = pMonitor->isMirror();
 
     // onModeChanged we check if the current mirror status matches the global.
@@ -58,31 +74,36 @@ void CProtocolManager::onMonitorModeChange(CMonitor* pMonitor) {
     else if (!ISMIRROR && (!PROTO::outputs.contains(pMonitor->szName) || PROTO::outputs.at(pMonitor->szName)->isDefunct())) {
         if (PROTO::outputs.contains(pMonitor->szName))
             PROTO::outputs.erase(pMonitor->szName);
-        PROTO::outputs.emplace(pMonitor->szName,
-                               std::make_unique<CWLOutputProtocol>(&wl_output_interface, 4, std::format("WLOutput ({})", pMonitor->szName), pMonitor->self.lock()));
+        PROTO::outputs.emplace(pMonitor->szName, makeShared<CWLOutputProtocol>(&wl_output_interface, 4, std::format("WLOutput ({})", pMonitor->szName), pMonitor->self.lock()));
     }
 }
 
 CProtocolManager::CProtocolManager() {
 
+    static const auto PENABLEEXPLICIT = CConfigValue<Hyprlang::INT>("render:explicit_sync");
+
     // Outputs are a bit dumb, we have to agree.
     static auto P = g_pHookSystem->hookDynamic("monitorAdded", [this](void* self, SCallbackInfo& info, std::any param) {
-        auto M = std::any_cast<CMonitor*>(param);
+        auto M = std::any_cast<PHLMONITOR>(param);
 
         // ignore mirrored outputs. I don't think this will ever be hit as mirrors are applied after
         // this event is emitted iirc.
-        if (M->isMirror())
+        // also ignore the fallback
+        if (M->isMirror() || M == g_pCompositor->m_pUnsafeOutput)
             return;
 
         if (PROTO::outputs.contains(M->szName))
             PROTO::outputs.erase(M->szName);
-        PROTO::outputs.emplace(M->szName, std::make_unique<CWLOutputProtocol>(&wl_output_interface, 4, std::format("WLOutput ({})", M->szName), M->self.lock()));
+
+        auto ref = makeShared<CWLOutputProtocol>(&wl_output_interface, 4, std::format("WLOutput ({})", M->szName), M->self.lock());
+        PROTO::outputs.emplace(M->szName, ref);
+        ref->self = ref;
 
         m_mModeChangeListeners[M->szName] = M->events.modeChanged.registerListener([M, this](std::any d) { onMonitorModeChange(M); });
     });
 
     static auto P2 = g_pHookSystem->hookDynamic("monitorRemoved", [this](void* self, SCallbackInfo& info, std::any param) {
-        auto M = std::any_cast<CMonitor*>(param);
+        auto M = std::any_cast<PHLMONITOR>(param);
         if (!PROTO::outputs.contains(M->szName))
             return;
         PROTO::outputs.at(M->szName)->remove();
@@ -111,6 +132,7 @@ CProtocolManager::CProtocolManager() {
     PROTO::pointerGestures     = std::make_unique<CPointerGesturesProtocol>(&zwp_pointer_gestures_v1_interface, 3, "PointerGestures");
     PROTO::foreignToplevelWlr  = std::make_unique<CForeignToplevelWlrProtocol>(&zwlr_foreign_toplevel_manager_v1_interface, 3, "ForeignToplevelWlr");
     PROTO::shortcutsInhibit    = std::make_unique<CKeyboardShortcutsInhibitProtocol>(&zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, "ShortcutsInhibit");
+    PROTO::textInputV1         = std::make_unique<CTextInputV1Protocol>(&zwp_text_input_manager_v1_interface, 1, "TextInputV1");
     PROTO::textInputV3         = std::make_unique<CTextInputV3Protocol>(&zwp_text_input_manager_v3_interface, 1, "TextInputV3");
     PROTO::constraints         = std::make_unique<CPointerConstraintsProtocol>(&zwp_pointer_constraints_v1_interface, 1, "PointerConstraints");
     PROTO::outputPower         = std::make_unique<COutputPowerProtocol>(&zwlr_output_power_manager_v1_interface, 1, "OutputPower");
@@ -130,17 +152,140 @@ CProtocolManager::CProtocolManager() {
     PROTO::dataWlr             = std::make_unique<CDataDeviceWLRProtocol>(&zwlr_data_control_manager_v1_interface, 2, "DataDeviceWlr");
     PROTO::primarySelection    = std::make_unique<CPrimarySelectionProtocol>(&zwp_primary_selection_device_manager_v1_interface, 1, "PrimarySelection");
     PROTO::xwaylandShell       = std::make_unique<CXWaylandShellProtocol>(&xwayland_shell_v1_interface, 1, "XWaylandShell");
+    PROTO::screencopy          = std::make_unique<CScreencopyProtocol>(&zwlr_screencopy_manager_v1_interface, 3, "Screencopy");
+    PROTO::toplevelExport      = std::make_unique<CToplevelExportProtocol>(&hyprland_toplevel_export_manager_v1_interface, 2, "ToplevelExport");
+    PROTO::globalShortcuts     = std::make_unique<CGlobalShortcutsProtocol>(&hyprland_global_shortcuts_manager_v1_interface, 1, "GlobalShortcuts");
+    PROTO::xdgDialog           = std::make_unique<CXDGDialogProtocol>(&xdg_dialog_v1_interface, 1, "XDGDialog");
+    PROTO::singlePixel         = std::make_unique<CSinglePixelProtocol>(&wp_single_pixel_buffer_manager_v1_interface, 1, "SinglePixel");
+    PROTO::securityContext     = std::make_unique<CSecurityContextProtocol>(&wp_security_context_manager_v1_interface, 1, "SecurityContext");
+    PROTO::ctm                 = std::make_unique<CHyprlandCTMControlProtocol>(&hyprland_ctm_control_manager_v1_interface, 1, "CTMControl");
+
+    for (auto const& b : g_pCompositor->m_pAqBackend->getImplementations()) {
+        if (b->type() != Aquamarine::AQ_BACKEND_DRM)
+            continue;
+
+        PROTO::lease = std::make_unique<CDRMLeaseProtocol>(&wp_drm_lease_device_v1_interface, 1, "DRMLease");
+        if (*PENABLEEXPLICIT)
+            PROTO::sync = std::make_unique<CDRMSyncobjProtocol>(&wp_linux_drm_syncobj_manager_v1_interface, 1, "DRMSyncobj");
+        break;
+    }
 
     if (g_pHyprOpenGL->getDRMFormats().size() > 0) {
         PROTO::mesaDRM  = std::make_unique<CMesaDRMProtocol>(&wl_drm_interface, 2, "MesaDRM");
         PROTO::linuxDma = std::make_unique<CLinuxDMABufV1Protocol>(&zwp_linux_dmabuf_v1_interface, 5, "LinuxDMABUF");
     } else
         Debug::log(WARN, "ProtocolManager: Not binding linux-dmabuf and MesaDRM: DMABUF not available");
+}
 
-    // Old protocol implementations.
-    // TODO: rewrite them to use hyprwayland-scanner.
-    m_pToplevelExportProtocolManager  = std::make_unique<CToplevelExportProtocolManager>();
-    m_pTextInputV1ProtocolManager     = std::make_unique<CTextInputV1ProtocolManager>();
-    m_pGlobalShortcutsProtocolManager = std::make_unique<CGlobalShortcutsProtocolManager>();
-    m_pScreencopyProtocolManager      = std::make_unique<CScreencopyProtocolManager>();
+CProtocolManager::~CProtocolManager() {
+    // this is dumb but i don't want to replace all 600 PROTO with the right thing
+
+    // Output
+    PROTO::outputs.clear();
+
+    // Core
+    PROTO::seat.reset();
+    PROTO::data.reset();
+    PROTO::compositor.reset();
+    PROTO::subcompositor.reset();
+    PROTO::shm.reset();
+
+    // Extensions
+    PROTO::viewport.reset();
+    PROTO::tearing.reset();
+    PROTO::fractional.reset();
+    PROTO::xdgOutput.reset();
+    PROTO::cursorShape.reset();
+    PROTO::idleInhibit.reset();
+    PROTO::relativePointer.reset();
+    PROTO::xdgDecoration.reset();
+    PROTO::alphaModifier.reset();
+    PROTO::gamma.reset();
+    PROTO::foreignToplevel.reset();
+    PROTO::pointerGestures.reset();
+    PROTO::foreignToplevelWlr.reset();
+    PROTO::shortcutsInhibit.reset();
+    PROTO::textInputV1.reset();
+    PROTO::textInputV3.reset();
+    PROTO::constraints.reset();
+    PROTO::outputPower.reset();
+    PROTO::activation.reset();
+    PROTO::idle.reset();
+    PROTO::sessionLock.reset();
+    PROTO::ime.reset();
+    PROTO::virtualKeyboard.reset();
+    PROTO::virtualPointer.reset();
+    PROTO::outputManagement.reset();
+    PROTO::serverDecorationKDE.reset();
+    PROTO::focusGrab.reset();
+    PROTO::tablet.reset();
+    PROTO::layerShell.reset();
+    PROTO::presentation.reset();
+    PROTO::xdgShell.reset();
+    PROTO::dataWlr.reset();
+    PROTO::primarySelection.reset();
+    PROTO::xwaylandShell.reset();
+    PROTO::screencopy.reset();
+    PROTO::toplevelExport.reset();
+    PROTO::globalShortcuts.reset();
+    PROTO::xdgDialog.reset();
+    PROTO::singlePixel.reset();
+    PROTO::securityContext.reset();
+    PROTO::ctm.reset();
+
+    PROTO::lease.reset();
+    PROTO::sync.reset();
+    PROTO::mesaDRM.reset();
+    PROTO::linuxDma.reset();
+}
+
+bool CProtocolManager::isGlobalPrivileged(const wl_global* global) {
+    if (!global)
+        return false;
+
+    for (auto& [k, v] : PROTO::outputs) {
+        if (global == v->getGlobal())
+            return false;
+    }
+
+    // this is a static whitelist of allowed protocols,
+    // outputs are dynamic so we checked them above
+    // clang-format off
+    static const std::vector<wl_global*> ALLOWED_WHITELIST = {
+        PROTO::seat->getGlobal(),
+        PROTO::data->getGlobal(),
+        PROTO::compositor->getGlobal(),
+        PROTO::subcompositor->getGlobal(),
+        PROTO::shm->getGlobal(),
+        PROTO::viewport->getGlobal(),
+        PROTO::tearing->getGlobal(),
+        PROTO::fractional->getGlobal(),
+        PROTO::cursorShape->getGlobal(),
+        PROTO::idleInhibit->getGlobal(),
+        PROTO::relativePointer->getGlobal(),
+        PROTO::xdgDecoration->getGlobal(),
+        PROTO::alphaModifier->getGlobal(),
+        PROTO::pointerGestures->getGlobal(),
+        PROTO::shortcutsInhibit->getGlobal(),
+        PROTO::textInputV1->getGlobal(),
+        PROTO::textInputV3->getGlobal(),
+        PROTO::constraints->getGlobal(),
+        PROTO::activation->getGlobal(),
+        PROTO::idle->getGlobal(),
+        PROTO::ime->getGlobal(),
+        PROTO::virtualKeyboard->getGlobal(),
+        PROTO::virtualPointer->getGlobal(),
+        PROTO::serverDecorationKDE->getGlobal(),
+        PROTO::tablet->getGlobal(),
+        PROTO::presentation->getGlobal(),
+        PROTO::xdgShell->getGlobal(),
+        PROTO::xdgDialog->getGlobal(),
+        PROTO::singlePixel->getGlobal(),
+        PROTO::sync     ? PROTO::sync->getGlobal()      : nullptr,
+        PROTO::mesaDRM  ? PROTO::mesaDRM->getGlobal()   : nullptr,
+        PROTO::linuxDma ? PROTO::linuxDma->getGlobal()  : nullptr,
+    };
+    // clang-format on
+
+    return std::find(ALLOWED_WHITELIST.begin(), ALLOWED_WHITELIST.end(), global) == ALLOWED_WHITELIST.end();
 }

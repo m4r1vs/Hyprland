@@ -1,9 +1,9 @@
-#include <ctype.h>
+#include <cctype>
 #include <netdb.h>
 #include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -12,19 +12,22 @@
 #include <unistd.h>
 #include <ranges>
 #include <algorithm>
-#include <signal.h>
+#include <csignal>
 #include <format>
 
 #include <iostream>
 #include <string>
+#include <print>
 #include <fstream>
 #include <string>
 #include <vector>
 #include <deque>
 #include <filesystem>
-#include <stdarg.h>
+#include <cstdarg>
 #include <regex>
+#include <sys/socket.h>
 #include <hyprutils/string/String.hpp>
+#include <cstring>
 using namespace Hyprutils::String;
 
 #include "Strings.hpp"
@@ -42,11 +45,11 @@ struct SInstanceData {
     bool        valid = true;
 };
 
-void log(std::string str) {
+void log(const std::string& str) {
     if (quiet)
         return;
 
-    std::cout << str;
+    std::println("{}", str);
 }
 
 std::string getRuntimeDir() {
@@ -100,13 +103,53 @@ std::vector<SInstanceData> instances() {
     return result;
 }
 
-int request(std::string arg, int minArgs = 0) {
+static volatile bool sigintReceived = false;
+void                 intHandler(int sig) {
+    sigintReceived = true;
+    std::println("[hyprctl] SIGINT received, closing connection");
+}
+
+int rollingRead(const int socket) {
+    sigintReceived = false;
+    signal(SIGINT, intHandler);
+
+    constexpr size_t              BUFFER_SIZE = 8192;
+    std::array<char, BUFFER_SIZE> buffer      = {0};
+    long                          sizeWritten = 0;
+    std::println("[hyprctl] reading from socket following up log:");
+    while (!sigintReceived) {
+        sizeWritten = read(socket, buffer.data(), BUFFER_SIZE);
+        if (sizeWritten < 0 && errno != EAGAIN) {
+            if (errno != EINTR)
+                std::println("Couldn't read (5): {}: {}", strerror(errno), errno);
+            close(socket);
+            return 5;
+        }
+
+        if (sizeWritten == 0)
+            break;
+
+        if (sizeWritten > 0) {
+            std::println("{}", std::string(buffer.data(), sizeWritten));
+            buffer.fill('\0');
+        }
+
+        usleep(100000);
+    }
+    close(socket);
+    return 0;
+}
+
+int request(std::string arg, int minArgs = 0, bool needRoll = false) {
     const auto SERVERSOCKET = socket(AF_UNIX, SOCK_STREAM, 0);
+
+    auto       t = timeval{.tv_sec = 5, .tv_usec = 0};
+    setsockopt(SERVERSOCKET, SOL_SOCKET, SO_RCVTIMEO, &t, sizeof(struct timeval));
 
     const auto ARGS = std::count(arg.begin(), arg.end(), ' ');
 
     if (ARGS < minArgs) {
-        log("Not enough arguments, expected at least " + minArgs);
+        log(std::format("Not enough arguments in '{}', expected at least {}", arg, minArgs));
         return -1;
     }
 
@@ -141,12 +184,17 @@ int request(std::string arg, int minArgs = 0) {
         return 4;
     }
 
+    if (needRoll)
+        return rollingRead(SERVERSOCKET);
+
     std::string reply        = "";
     char        buffer[8192] = {0};
 
     sizeWritten = read(SERVERSOCKET, buffer, 8192);
 
     if (sizeWritten < 0) {
+        if (errno == EWOULDBLOCK)
+            log("Hyprland IPC didn't respond in time\n");
         log("Couldn't read (5)");
         return 5;
     }
@@ -240,12 +288,12 @@ void instancesRequest(bool json) {
     std::vector<SInstanceData> inst = instances();
 
     if (!json) {
-        for (auto& el : inst) {
+        for (auto const& el : inst) {
             result += std::format("instance {}:\n\ttime: {}\n\tpid: {}\n\twl socket: {}\n\n", el.id, el.time, el.pid, el.wlSocket);
         }
     } else {
         result += '[';
-        for (auto& el : inst) {
+        for (auto const& el : inst) {
             result += std::format(R"#(
 {{
     "instance": "{}",
@@ -276,7 +324,7 @@ int main(int argc, char** argv) {
     bool parseArgs = true;
 
     if (argc < 2) {
-        std::cout << USAGE << std::endl;
+        std::println("{}", USAGE);
         return 1;
     }
 
@@ -284,6 +332,7 @@ int main(int argc, char** argv) {
     std::string fullArgs         = "";
     const auto  ARGS             = splitArgs(argc, argv);
     bool        json             = false;
+    bool        needRoll         = false;
     std::string overrideInstance = "";
 
     for (std::size_t i = 0; i < ARGS.size(); ++i) {
@@ -303,13 +352,16 @@ int main(int argc, char** argv) {
                 fullArgs += "a";
             } else if ((ARGS[i] == "-c" || ARGS[i] == "--config") && !fullArgs.contains("c")) {
                 fullArgs += "c";
+            } else if ((ARGS[i] == "-f" || ARGS[i] == "--follow") && !fullArgs.contains("f")) {
+                fullArgs += "f";
+                needRoll = true;
             } else if (ARGS[i] == "--batch") {
                 fullRequest = "--batch ";
             } else if (ARGS[i] == "--instance" || ARGS[i] == "-i") {
                 ++i;
 
                 if (i >= ARGS.size()) {
-                    std::cout << USAGE << std::endl;
+                    std::println("{}", USAGE);
                     return 1;
                 }
 
@@ -320,24 +372,24 @@ int main(int argc, char** argv) {
                 const std::string& cmd = ARGS[0];
 
                 if (cmd == "hyprpaper") {
-                    std::cout << HYPRPAPER_HELP << std::endl;
+                    std::println("{}", HYPRPAPER_HELP);
                 } else if (cmd == "notify") {
-                    std::cout << NOTIFY_HELP << std::endl;
+                    std::println("{}", NOTIFY_HELP);
                 } else if (cmd == "output") {
-                    std::cout << OUTPUT_HELP << std::endl;
+                    std::println("{}", OUTPUT_HELP);
                 } else if (cmd == "plugin") {
-                    std::cout << PLUGIN_HELP << std::endl;
+                    std::println("{}", PLUGIN_HELP);
                 } else if (cmd == "setprop") {
-                    std::cout << SETPROP_HELP << std::endl;
+                    std::println("{}", SETPROP_HELP);
                 } else if (cmd == "switchxkblayout") {
-                    std::cout << SWITCHXKBLAYOUT_HELP << std::endl;
+                    std::println("{}", SWITCHXKBLAYOUT_HELP);
                 } else {
-                    std::cout << USAGE << std::endl;
+                    std::println("{}", USAGE);
                 }
 
                 return 1;
             } else {
-                std::cout << USAGE << std::endl;
+                std::println("{}", USAGE);
                 return 1;
             }
 
@@ -348,7 +400,7 @@ int main(int argc, char** argv) {
     }
 
     if (fullRequest.empty()) {
-        std::cout << USAGE << std::endl;
+        std::println("{}", USAGE);
         return 1;
     }
 
@@ -360,6 +412,11 @@ int main(int argc, char** argv) {
     if (fullRequest.contains("/instances")) {
         instancesRequest(json);
         return 0;
+    }
+
+    if (needRoll && !fullRequest.contains("/rollinglog")) {
+        log("only 'rollinglog' command supports '--follow' option");
+        return 1;
     }
 
     if (overrideInstance.contains("_"))
@@ -420,7 +477,9 @@ int main(int argc, char** argv) {
     else if (fullRequest.contains("/decorations"))
         exitStatus = request(fullRequest, 1);
     else if (fullRequest.contains("/--help"))
-        std::cout << USAGE << std::endl;
+        std::println("{}", USAGE);
+    else if (fullRequest.contains("/rollinglog") && needRoll)
+        exitStatus = request(fullRequest, 0, true);
     else {
         exitStatus = request(fullRequest);
     }

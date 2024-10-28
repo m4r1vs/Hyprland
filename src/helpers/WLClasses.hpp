@@ -8,17 +8,19 @@
 #include "AnimatedVariable.hpp"
 #include "../desktop/WLSurface.hpp"
 #include "signal/Signal.hpp"
-#include "Region.hpp"
+#include "math/Math.hpp"
 
 class CMonitor;
 class IPointer;
 class IKeyboard;
 class CWLSurfaceResource;
 
+AQUAMARINE_FORWARD(ISwitch);
+
 struct SRenderData {
-    CMonitor* pMonitor;
-    timespec* when;
-    double    x, y;
+    PHLMONITORREF pMonitor;
+    timespec*     when;
+    double        x, y;
 
     // for iters
     void*                  data    = nullptr;
@@ -51,30 +53,33 @@ struct SRenderData {
     PHLWINDOW pWindow;
 
     bool      popup = false;
+
+    // counts how many surfaces this pass has rendered
+    int surfaceCounter = 0;
 };
 
 struct SSwipeGesture {
-    PHLWORKSPACE pWorkspaceBegin = nullptr;
+    PHLWORKSPACE  pWorkspaceBegin = nullptr;
 
-    double       delta = 0;
+    double        delta = 0;
 
-    int          initialDirection = 0;
-    float        avgSpeed         = 0;
-    int          speedPoints      = 0;
-    int          touch_id         = 0;
+    int           initialDirection = 0;
+    float         avgSpeed         = 0;
+    int           speedPoints      = 0;
+    int           touch_id         = 0;
 
-    CMonitor*    pMonitor = nullptr;
+    PHLMONITORREF pMonitor;
 };
 
 struct SSwitchDevice {
-    wlr_input_device* pWlrDevice = nullptr;
+    WP<Aquamarine::ISwitch> pDevice;
 
-    int               status = -1; // uninitialized
-
-    DYNLISTENER(destroy);
-    DYNLISTENER(toggle);
+    struct {
+        CHyprSignalListener destroy;
+        CHyprSignalListener fire;
+    } listeners;
 
     bool operator==(const SSwitchDevice& other) const {
-        return pWlrDevice == other.pWlrDevice;
+        return pDevice == other.pDevice;
     }
 };

@@ -3,6 +3,9 @@
 #include "../config/ConfigValue.hpp"
 #include "../protocols/FractionalScale.hpp"
 #include "../protocols/SessionLock.hpp"
+#include "../managers/SeatManager.hpp"
+#include <algorithm>
+#include <ranges>
 
 SSessionLockSurface::SSessionLockSurface(SP<CSessionLockSurface> surface_) : surface(surface_) {
     pWlrSurface = surface->surface();
@@ -10,7 +13,7 @@ SSessionLockSurface::SSessionLockSurface(SP<CSessionLockSurface> surface_) : sur
     listeners.map = surface_->events.map.registerListener([this](std::any data) {
         mapped = true;
 
-        g_pCompositor->focusSurface(surface->surface());
+        g_pInputManager->simulateMouseMovement();
 
         const auto PMONITOR = g_pCompositor->getMonitorFromID(iMonitorID);
 
@@ -27,6 +30,9 @@ SSessionLockSurface::SSessionLockSurface(SP<CSessionLockSurface> surface_) : sur
 
     listeners.commit = surface_->events.commit.registerListener([this](std::any data) {
         const auto PMONITOR = g_pCompositor->getMonitorFromID(iMonitorID);
+
+        if (mapped && pWlrSurface != g_pCompositor->m_pLastFocus)
+            g_pInputManager->simulateMouseMovement();
 
         if (PMONITOR)
             g_pHyprRenderer->damageMonitor(PMONITOR);
@@ -66,18 +72,20 @@ void CSessionLockManager::onNewSessionLock(SP<CSessionLock> pLock) {
         m_pSessionLock.reset();
         g_pInputManager->refocus();
 
-        for (auto& m : g_pCompositor->m_vMonitors)
-            g_pHyprRenderer->damageMonitor(m.get());
+        for (auto const& m : g_pCompositor->m_vMonitors)
+            g_pHyprRenderer->damageMonitor(m);
     });
 
-    m_pSessionLock->listeners.destroy = pLock->events.destroyed.registerListener([](std::any data) {
+    m_pSessionLock->listeners.destroy = pLock->events.destroyed.registerListener([this](std::any data) {
+        m_pSessionLock.reset();
         g_pCompositor->focusSurface(nullptr);
 
-        for (auto& m : g_pCompositor->m_vMonitors)
-            g_pHyprRenderer->damageMonitor(m.get());
+        for (auto const& m : g_pCompositor->m_vMonitors)
+            g_pHyprRenderer->damageMonitor(m);
     });
 
-    pLock->sendLocked();
+    g_pCompositor->focusSurface(nullptr);
+    g_pSeatManager->setGrab(nullptr);
 }
 
 bool CSessionLockManager::isSessionLocked() {
@@ -88,7 +96,7 @@ SSessionLockSurface* CSessionLockManager::getSessionLockSurfaceForMonitor(uint64
     if (!m_pSessionLock)
         return nullptr;
 
-    for (auto& sls : m_pSessionLock->vSessionLockSurfaces) {
+    for (auto const& sls : m_pSessionLock->vSessionLockSurfaces) {
         if (sls->iMonitorID == id) {
             if (sls->mapped)
                 return sls.get();
@@ -101,10 +109,9 @@ SSessionLockSurface* CSessionLockManager::getSessionLockSurfaceForMonitor(uint64
 }
 
 // We don't want the red screen to flash.
-// This violates the protocol a bit, but tries to handle the missing sync between a lock surface beeing created and the red screen beeing drawn.
 float CSessionLockManager::getRedScreenAlphaForMonitor(uint64_t id) {
     if (!m_pSessionLock)
-        return 0.F;
+        return 1.F;
 
     const auto& NOMAPPEDSURFACETIMER = m_pSessionLock->mMonitorsWithoutMappedSurfaceTimers.find(id);
 
@@ -117,6 +124,18 @@ float CSessionLockManager::getRedScreenAlphaForMonitor(uint64_t id) {
     return std::clamp(NOMAPPEDSURFACETIMER->second.getSeconds() - /* delay for screencopy */ 0.5f, 0.f, 1.f);
 }
 
+void CSessionLockManager::onLockscreenRenderedOnMonitor(uint64_t id) {
+    if (!m_pSessionLock || m_pSessionLock->m_hasSentLocked)
+        return;
+    m_pSessionLock->m_lockedMonitors.emplace(id);
+    const auto MONITORS = g_pCompositor->m_vMonitors;
+    const bool LOCKED   = std::all_of(MONITORS.begin(), MONITORS.end(), [this](auto m) { return m_pSessionLock->m_lockedMonitors.contains(m->ID); });
+    if (LOCKED && m_pSessionLock->lock->good()) {
+        m_pSessionLock->lock->sendLocked();
+        m_pSessionLock->m_hasSentLocked = true;
+    }
+}
+
 bool CSessionLockManager::isSurfaceSessionLock(SP<CWLSurfaceResource> pSurface) {
     // TODO: this has some edge cases when it's wrong (e.g. destroyed lock but not yet surfaces)
     // but can be easily fixed when I rewrite wlr_surface
@@ -124,7 +143,7 @@ bool CSessionLockManager::isSurfaceSessionLock(SP<CWLSurfaceResource> pSurface) 
     if (!m_pSessionLock)
         return false;
 
-    for (auto& sls : m_pSessionLock->vSessionLockSurfaces) {
+    for (auto const& sls : m_pSessionLock->vSessionLockSurfaces) {
         if (sls->surface->surface() == pSurface)
             return true;
     }
@@ -141,7 +160,7 @@ void CSessionLockManager::removeSessionLockSurface(SSessionLockSurface* pSLS) {
     if (g_pCompositor->m_pLastFocus)
         return;
 
-    for (auto& sls : m_pSessionLock->vSessionLockSurfaces) {
+    for (auto const& sls : m_pSessionLock->vSessionLockSurfaces) {
         if (!sls->mapped)
             continue;
 
@@ -152,4 +171,8 @@ void CSessionLockManager::removeSessionLockSurface(SSessionLockSurface* pSLS) {
 
 bool CSessionLockManager::isSessionLockPresent() {
     return m_pSessionLock && !m_pSessionLock->vSessionLockSurfaces.empty();
+}
+
+bool CSessionLockManager::anySessionLockSurfacesPresent() {
+    return m_pSessionLock && std::ranges::any_of(m_pSessionLock->vSessionLockSurfaces, [](const auto& surf) { return surf->mapped; });
 }

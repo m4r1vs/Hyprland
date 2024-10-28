@@ -4,38 +4,37 @@
 #include <string>
 #include "../defines.hpp"
 #include "DesktopTypes.hpp"
+#include "../helpers/MiscFunctions.hpp"
 
 enum eFullscreenMode : int8_t {
-    FULLSCREEN_INVALID = -1,
-    FULLSCREEN_FULL    = 0,
-    FULLSCREEN_MAXIMIZED
+    FSMODE_NONE       = 0,
+    FSMODE_MAXIMIZED  = 1 << 0,
+    FSMODE_FULLSCREEN = 1 << 1,
+    FSMODE_MAX        = (1 << 2) - 1
 };
 
 class CWindow;
 
 class CWorkspace {
   public:
-    static PHLWORKSPACE create(int id, int monitorID, std::string name, bool special = false, bool isEmtpy = true);
+    static PHLWORKSPACE create(WORKSPACEID id, PHLMONITOR monitor, std::string name, bool special = false, bool isEmpty = true);
     // use create() don't use this
-    CWorkspace(int id, int monitorID, std::string name, bool special = false, bool isEmpty = true);
+    CWorkspace(WORKSPACEID id, PHLMONITOR monitor, std::string name, bool special = false, bool isEmpty = true);
     ~CWorkspace();
 
     // Workspaces ID-based have IDs > 0
     // and workspaces name-based have IDs starting with -1337
-    int         m_iID        = -1;
-    std::string m_szName     = "";
-    uint64_t    m_iMonitorID = -1;
-    // Previous workspace ID is stored during a workspace change, allowing travel
+    WORKSPACEID   m_iID    = WORKSPACE_INVALID;
+    std::string   m_szName = "";
+    PHLMONITORREF m_pMonitor;
+    // Previous workspace ID and name is stored during a workspace change, allowing travel
     // to the previous workspace.
-    struct SPrevWorkspaceData {
-        int         iID  = -1;
-        std::string name = "";
-    } m_sPrevWorkspace;
+    SWorkspaceIDName m_sPrevWorkspace, m_sPrevWorkspacePerMonitor;
 
-    bool            m_bHasFullscreenWindow = false;
-    eFullscreenMode m_efFullscreenMode     = FULLSCREEN_FULL;
+    bool             m_bHasFullscreenWindow = false;
+    eFullscreenMode  m_efFullscreenMode     = FSMODE_NONE;
 
-    wl_array        m_wlrCoordinateArr;
+    wl_array         m_wlrCoordinateArr;
 
     // for animations
     CAnimatedVariable<Vector2D> m_vRenderOffset;
@@ -58,26 +57,29 @@ class CWorkspace {
     // last monitor (used on reconnect)
     std::string m_szLastMonitor = "";
 
-    bool        m_bWasCreatedEmtpy = true;
+    bool        m_bWasCreatedEmpty = true;
 
     bool        m_bPersistent = false;
 
     // Inert: destroyed and invalid. If this is true, release the ptr you have.
-    bool        inert();
+    bool             inert();
 
-    void        startAnim(bool in, bool left, bool instant = false);
-    void        setActive(bool on);
+    void             startAnim(bool in, bool left, bool instant = false);
+    void             setActive(bool on);
 
-    void        moveToMonitor(const int&);
+    void             moveToMonitor(const MONITORID&);
+    MONITORID        monitorID();
 
-    PHLWINDOW   getLastFocusedWindow();
-    void        rememberPrevWorkspace(const PHLWORKSPACE& prevWorkspace);
+    PHLWINDOW        getLastFocusedWindow();
+    void             rememberPrevWorkspace(const PHLWORKSPACE& prevWorkspace);
 
-    std::string getConfigName();
+    std::string      getConfigName();
 
-    bool        matchesStaticSelector(const std::string& selector);
+    bool             matchesStaticSelector(const std::string& selector);
 
-    void        markInert();
+    void             markInert();
+
+    SWorkspaceIDName getPrevWorkspaceIDName(bool perMonitor) const;
 
   private:
     void                 init(PHLWORKSPACE self);

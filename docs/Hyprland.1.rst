@@ -14,8 +14,8 @@ SYNOPSIS
 DESCRIPTION
 ===========
 
-**Hyprland** is a dynamic tiling Wayland compositor based on
-wlroots that doesn't sacrifice on its looks.
+**Hyprland** is an independent, highly customizable, 
+dynamic tiling Wayland compositor that doesn't sacrifice on its looks. 
 
 You can launch Hyprland by either going into a TTY and
 executing **Hyprland**, or with a login manager.
@@ -40,6 +40,12 @@ OPTIONS
 
 **-c**, **--config**
     Specify config file to use.
+
+**--socket**
+    Sets the Wayland socket name (for Wayland socket handover)
+
+**--wayland-fd**
+    Sets the Wayland socket file descriptor (for Wayland socket handover)
 
 BUGS
 ====

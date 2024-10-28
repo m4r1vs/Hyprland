@@ -15,7 +15,8 @@
 #include <wayland-server-protocol.h>
 #include "wayland.hpp"
 #include "../../helpers/signal/Signal.hpp"
-#include "../../helpers/Vector2D.hpp"
+#include "../../helpers/math/Math.hpp"
+#include "../types/SurfaceRole.hpp"
 
 constexpr const char* HL_SEAT_NAME = "Hyprland";
 
@@ -26,6 +27,20 @@ class CWLPointerResource;
 class CWLKeyboardResource;
 class CWLTouchResource;
 class CWLSeatResource;
+
+class CCursorSurfaceRole : public ISurfaceRole {
+  public:
+    virtual eSurfaceRole role() {
+        return SURFACE_ROLE_CURSOR;
+    }
+
+    // gets the current pixel data from a shm surface
+    // will assert if the surface is not a cursor
+    static std::vector<uint8_t>& cursorPixelData(SP<CWLSurfaceResource> surface);
+
+  private:
+    std::vector<uint8_t> cursorShmPixelData;
+};
 
 class CWLTouchResource {
   public:
@@ -76,6 +91,8 @@ class CWLPointerResource {
     SP<CWlPointer>         resource;
     WP<CWLSurfaceResource> currentSurface;
 
+    std::vector<uint32_t>  pressedButtons;
+
     struct {
         CHyprSignalListener destroySurface;
     } listeners;
@@ -102,6 +119,10 @@ class CWLKeyboardResource {
     struct {
         CHyprSignalListener destroySurface;
     } listeners;
+
+    std::string lastKeymap  = "<none>";
+    uint32_t    lastRate    = 0;
+    uint32_t    lastDelayMs = 0;
 };
 
 class CWLSeatResource {

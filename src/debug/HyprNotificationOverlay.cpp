@@ -37,15 +37,15 @@ CHyprNotificationOverlay::~CHyprNotificationOverlay() {
 void CHyprNotificationOverlay::addNotification(const std::string& text, const CColor& color, const float timeMs, const eIcons icon, const float fontSize) {
     const auto PNOTIF = m_dNotifications.emplace_back(std::make_unique<SNotification>()).get();
 
-    PNOTIF->text  = text;
+    PNOTIF->text  = icon != eIcons::ICON_NONE ? " " + text /* tiny bit of padding otherwise icon touches text */ : text;
     PNOTIF->color = color == CColor(0) ? ICONS_COLORS[icon] : color;
     PNOTIF->started.reset();
     PNOTIF->timeMs   = timeMs;
     PNOTIF->icon     = icon;
     PNOTIF->fontSize = fontSize;
 
-    for (auto& m : g_pCompositor->m_vMonitors) {
-        g_pCompositor->scheduleFrameForMonitor(m.get());
+    for (auto const& m : g_pCompositor->m_vMonitors) {
+        g_pCompositor->scheduleFrameForMonitor(m);
     }
 }
 
@@ -61,7 +61,7 @@ void CHyprNotificationOverlay::dismissNotifications(const int amount) {
     }
 }
 
-CBox CHyprNotificationOverlay::drawNotifications(CMonitor* pMonitor) {
+CBox CHyprNotificationOverlay::drawNotifications(PHLMONITOR pMonitor) {
     static constexpr auto ANIM_DURATION_MS   = 600.0;
     static constexpr auto ANIM_LAG_MS        = 100.0;
     static constexpr auto NOTIF_LEFTBAR_SIZE = 5.0;
@@ -87,7 +87,7 @@ CBox CHyprNotificationOverlay::drawNotifications(CMonitor* pMonitor) {
     const auto iconBackendID = iconBackendFromLayout(layout);
     const auto PBEZIER       = g_pAnimationManager->getBezier("default");
 
-    for (auto& notif : m_dNotifications) {
+    for (auto const& notif : m_dNotifications) {
         const auto ICONPADFORNOTIF = notif->icon == ICON_NONE ? 0 : ICON_PAD;
         const auto FONTSIZE        = std::clamp((int)(notif->fontSize * ((pMonitor->vecPixelSize.x * SCALE) / 1920.f)), 8, 40);
 
@@ -131,7 +131,7 @@ CBox CHyprNotificationOverlay::drawNotifications(CMonitor* pMonitor) {
         textW /= PANGO_SCALE;
         textH /= PANGO_SCALE;
 
-        const auto NOTIFSIZE = Vector2D{textW + 20 + iconW + 2 * ICONPADFORNOTIF, textH + 10};
+        const auto NOTIFSIZE = Vector2D{textW + 20.0 + iconW + 2 * ICONPADFORNOTIF, textH + 10.0};
 
         // draw rects
         cairo_set_source_rgba(m_pCairo, notif->color.r, notif->color.g, notif->color.b, notif->color.a);
@@ -187,7 +187,7 @@ CBox CHyprNotificationOverlay::drawNotifications(CMonitor* pMonitor) {
     return CBox{(int)(pMonitor->vecPosition.x + pMonitor->vecSize.x - maxWidth - 20), (int)pMonitor->vecPosition.y, (int)maxWidth + 20, (int)offsetY + 10};
 }
 
-void CHyprNotificationOverlay::draw(CMonitor* pMonitor) {
+void CHyprNotificationOverlay::draw(PHLMONITOR pMonitor) {
 
     const auto MONSIZE = pMonitor->vecTransformedSize;
 

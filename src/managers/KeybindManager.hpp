@@ -6,6 +6,7 @@
 #include "../Compositor.hpp"
 #include <unordered_map>
 #include <functional>
+#include <xkbcommon/xkbcommon.h>
 #include "../devices/IPointer.hpp"
 
 class CInputManager;
@@ -33,6 +34,7 @@ struct SKeybind {
     bool                   ignoreMods     = false;
     bool                   multiKey       = false;
     bool                   hasDescription = false;
+    bool                   dontInhibit    = false;
 
     // DO NOT INITIALIZE
     bool shadowed = false;
@@ -69,39 +71,48 @@ enum eMultiKeyCase {
     MK_FULL_MATCH
 };
 
+struct SDispatchResult {
+    bool        passEvent = false;
+    bool        success   = true;
+    std::string error;
+};
+
 class CKeybindManager {
   public:
     CKeybindManager();
     ~CKeybindManager();
 
-    bool                                                              onKeyEvent(std::any, SP<IKeyboard>);
-    bool                                                              onAxisEvent(const IPointer::SAxisEvent&);
-    bool                                                              onMouseEvent(const IPointer::SButtonEvent&);
-    void                                                              resizeWithBorder(const IPointer::SButtonEvent&);
-    void                                                              onSwitchEvent(const std::string&);
-    void                                                              onSwitchOnEvent(const std::string&);
-    void                                                              onSwitchOffEvent(const std::string&);
+    bool                                                                         onKeyEvent(std::any, SP<IKeyboard>);
+    bool                                                                         onAxisEvent(const IPointer::SAxisEvent&);
+    bool                                                                         onMouseEvent(const IPointer::SButtonEvent&);
+    void                                                                         resizeWithBorder(const IPointer::SButtonEvent&);
+    void                                                                         onSwitchEvent(const std::string&);
+    void                                                                         onSwitchOnEvent(const std::string&);
+    void                                                                         onSwitchOffEvent(const std::string&);
 
-    void                                                              addKeybind(SKeybind);
-    void                                                              removeKeybind(uint32_t, const SParsedKey&);
-    uint32_t                                                          stringToModMask(std::string);
-    uint32_t                                                          keycodeToModifier(xkb_keycode_t);
-    void                                                              clearKeybinds();
-    void                                                              shadowKeybinds(const xkb_keysym_t& doesntHave = 0, const uint32_t doesntHaveCode = 0);
+    void                                                                         addKeybind(SKeybind);
+    void                                                                         removeKeybind(uint32_t, const SParsedKey&);
+    uint32_t                                                                     stringToModMask(std::string);
+    uint32_t                                                                     keycodeToModifier(xkb_keycode_t);
+    void                                                                         clearKeybinds();
+    void                                                                         shadowKeybinds(const xkb_keysym_t& doesntHave = 0, const uint32_t doesntHaveCode = 0);
+    std::string                                                                  getCurrentSubmap();
 
-    std::unordered_map<std::string, std::function<void(std::string)>> m_mDispatchers;
+    std::unordered_map<std::string, std::function<SDispatchResult(std::string)>> m_mDispatchers;
 
-    wl_event_source*                                                  m_pActiveKeybindEventSource = nullptr;
+    wl_event_source*                                                             m_pActiveKeybindEventSource = nullptr;
 
-    bool                                                              m_bGroupsLocked = false;
+    bool                                                                         m_bGroupsLocked = false;
 
-    std::list<SKeybind>                                               m_lKeybinds;
+    std::list<SKeybind>                                                          m_lKeybinds;
 
     //since we cant find keycode through keyname in xkb:
     //on sendshortcut call, we once search for keyname (e.g. "g") the correct keycode (e.g. 42)
     //and cache it in this map to make sendshortcut calls faster
     //we also store the keyboard pointer (in the string) to differentiate between different keyboard (layouts)
     std::unordered_map<std::string, xkb_keycode_t> m_mKeyToCodeCache;
+
+    static SDispatchResult                         changeMouseBindMode(const eMouseBindMode mode);
 
   private:
     std::deque<SPressedKeyWithMods> m_dPressedKeys;
@@ -114,14 +125,13 @@ class CKeybindManager {
     uint32_t                        m_uLastCode      = 0;
     uint32_t                        m_uLastMouseCode = 0;
 
-    bool                            m_bIsMouseBindActive = false;
     std::vector<SKeybind*>          m_vPressedSpecialBinds;
 
     int                             m_iPassPressed = -1; // used for pass
 
     CTimer                          m_tScrollTimer;
 
-    bool                            handleKeybinds(const uint32_t, const SPressedKeyWithMods&, bool);
+    SDispatchResult                 handleKeybinds(const uint32_t, const SPressedKeyWithMods&, bool);
 
     std::set<xkb_keysym_t>          m_sMkKeys = {};
     std::set<xkb_keysym_t>          m_sMkMods = {};
@@ -136,80 +146,84 @@ class CKeybindManager {
     void                            updateXKBTranslationState();
     bool                            ensureMouseBindState();
 
-    static bool                     tryMoveFocusToMonitor(CMonitor* monitor);
+    static bool                     tryMoveFocusToMonitor(PHLMONITOR monitor);
     static void                     moveWindowOutOfGroup(PHLWINDOW pWindow, const std::string& dir = "");
     static void                     moveWindowIntoGroup(PHLWINDOW pWindow, PHLWINDOW pWindowInDirection);
     static void                     switchToWindow(PHLWINDOW PWINDOWTOCHANGETO);
+    static uint64_t                 spawnRawProc(std::string, PHLWORKSPACE pInitialWorkspace);
+    static uint64_t                 spawnWithRules(std::string, PHLWORKSPACE pInitialWorkspace);
 
     // -------------- Dispatchers -------------- //
-    static void     killActive(std::string);
-    static void     kill(std::string);
-    static void     spawn(std::string);
-    static uint64_t spawnRaw(std::string);
-    static void     toggleActiveFloating(std::string);
-    static void     toggleActivePseudo(std::string);
-    static void     setActiveFloating(std::string);
-    static void     setActiveTiled(std::string);
-    static void     changeworkspace(std::string);
-    static void     fullscreenActive(std::string);
-    static void     fakeFullscreenActive(std::string);
-    static void     moveActiveToWorkspace(std::string);
-    static void     moveActiveToWorkspaceSilent(std::string);
-    static void     moveFocusTo(std::string);
-    static void     focusUrgentOrLast(std::string);
-    static void     focusCurrentOrLast(std::string);
-    static void     centerWindow(std::string);
-    static void     moveActiveTo(std::string);
-    static void     swapActive(std::string);
-    static void     toggleGroup(std::string);
-    static void     changeGroupActive(std::string);
-    static void     alterSplitRatio(std::string);
-    static void     focusMonitor(std::string);
-    static void     toggleSplit(std::string);
-    static void     swapSplit(std::string);
-    static void     moveCursorToCorner(std::string);
-    static void     moveCursor(std::string);
-    static void     workspaceOpt(std::string);
-    static void     renameWorkspace(std::string);
-    static void     exitHyprland(std::string);
-    static void     moveCurrentWorkspaceToMonitor(std::string);
-    static void     moveWorkspaceToMonitor(std::string);
-    static void     focusWorkspaceOnCurrentMonitor(std::string);
-    static void     toggleSpecialWorkspace(std::string);
-    static void     forceRendererReload(std::string);
-    static void     resizeActive(std::string);
-    static void     moveActive(std::string);
-    static void     moveWindow(std::string);
-    static void     resizeWindow(std::string);
-    static void     circleNext(std::string);
-    static void     focusWindow(std::string);
-    static void     tagWindow(std::string);
-    static void     setSubmap(std::string);
-    static void     pass(std::string);
-    static void     sendshortcut(std::string);
-    static void     layoutmsg(std::string);
-    static void     toggleOpaque(std::string);
-    static void     dpms(std::string);
-    static void     swapnext(std::string);
-    static void     swapActiveWorkspaces(std::string);
-    static void     pinActive(std::string);
-    static void     mouse(std::string);
-    static void     bringActiveToTop(std::string);
-    static void     alterZOrder(std::string);
-    static void     lockGroups(std::string);
-    static void     lockActiveGroup(std::string);
-    static void     moveIntoGroup(std::string);
-    static void     moveOutOfGroup(std::string);
-    static void     moveGroupWindow(std::string);
-    static void     moveWindowOrGroup(std::string);
-    static void     setIgnoreGroupLock(std::string);
-    static void     denyWindowFromGroup(std::string);
-    static void     global(std::string);
+    static SDispatchResult killActive(std::string);
+    static SDispatchResult kill(std::string);
+    static SDispatchResult spawn(std::string);
+    static SDispatchResult spawnRaw(std::string);
+    static SDispatchResult toggleActiveFloating(std::string);
+    static SDispatchResult toggleActivePseudo(std::string);
+    static SDispatchResult setActiveFloating(std::string);
+    static SDispatchResult setActiveTiled(std::string);
+    static SDispatchResult changeworkspace(std::string);
+    static SDispatchResult fullscreenActive(std::string);
+    static SDispatchResult fullscreenStateActive(std::string args);
+    static SDispatchResult moveActiveToWorkspace(std::string);
+    static SDispatchResult moveActiveToWorkspaceSilent(std::string);
+    static SDispatchResult moveFocusTo(std::string);
+    static SDispatchResult focusUrgentOrLast(std::string);
+    static SDispatchResult focusCurrentOrLast(std::string);
+    static SDispatchResult centerWindow(std::string);
+    static SDispatchResult moveActiveTo(std::string);
+    static SDispatchResult swapActive(std::string);
+    static SDispatchResult toggleGroup(std::string);
+    static SDispatchResult changeGroupActive(std::string);
+    static SDispatchResult alterSplitRatio(std::string);
+    static SDispatchResult focusMonitor(std::string);
+    static SDispatchResult toggleSplit(std::string);
+    static SDispatchResult swapSplit(std::string);
+    static SDispatchResult moveCursorToCorner(std::string);
+    static SDispatchResult moveCursor(std::string);
+    static SDispatchResult workspaceOpt(std::string);
+    static SDispatchResult renameWorkspace(std::string);
+    static SDispatchResult exitHyprland(std::string);
+    static SDispatchResult moveCurrentWorkspaceToMonitor(std::string);
+    static SDispatchResult moveWorkspaceToMonitor(std::string);
+    static SDispatchResult focusWorkspaceOnCurrentMonitor(std::string);
+    static SDispatchResult toggleSpecialWorkspace(std::string);
+    static SDispatchResult forceRendererReload(std::string);
+    static SDispatchResult resizeActive(std::string);
+    static SDispatchResult moveActive(std::string);
+    static SDispatchResult moveWindow(std::string);
+    static SDispatchResult resizeWindow(std::string);
+    static SDispatchResult circleNext(std::string);
+    static SDispatchResult focusWindow(std::string);
+    static SDispatchResult tagWindow(std::string);
+    static SDispatchResult setSubmap(std::string);
+    static SDispatchResult pass(std::string);
+    static SDispatchResult sendshortcut(std::string);
+    static SDispatchResult layoutmsg(std::string);
+    static SDispatchResult dpms(std::string);
+    static SDispatchResult swapnext(std::string);
+    static SDispatchResult swapActiveWorkspaces(std::string);
+    static SDispatchResult pinActive(std::string);
+    static SDispatchResult mouse(std::string);
+    static SDispatchResult bringActiveToTop(std::string);
+    static SDispatchResult alterZOrder(std::string);
+    static SDispatchResult lockGroups(std::string);
+    static SDispatchResult lockActiveGroup(std::string);
+    static SDispatchResult moveIntoGroup(std::string);
+    static SDispatchResult moveOutOfGroup(std::string);
+    static SDispatchResult moveGroupWindow(std::string);
+    static SDispatchResult moveWindowOrGroup(std::string);
+    static SDispatchResult setIgnoreGroupLock(std::string);
+    static SDispatchResult denyWindowFromGroup(std::string);
+    static SDispatchResult global(std::string);
+    static SDispatchResult event(std::string);
+    static SDispatchResult setProp(std::string);
 
     friend class CCompositor;
     friend class CInputManager;
     friend class CConfigManager;
     friend class CWorkspace;
+    friend class CPointerManager;
 };
 
 inline std::unique_ptr<CKeybindManager> g_pKeybindManager;

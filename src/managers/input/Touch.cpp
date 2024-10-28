@@ -1,23 +1,24 @@
 #include "InputManager.hpp"
 #include "../../Compositor.hpp"
 #include "../../config/ConfigValue.hpp"
-#include "../../protocols/IdleNotify.hpp"
 #include "../../devices/ITouch.hpp"
 #include "../SeatManager.hpp"
 
 void CInputManager::onTouchDown(ITouch::SDownEvent e) {
+    m_bLastInputTouch = true;
+
     static auto PSWIPETOUCH  = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_touch");
     static auto PGAPSOUTDATA = CConfigValue<Hyprlang::CUSTOMTYPE>("general:gaps_out");
     auto* const PGAPSOUT     = (CCssGapData*)(PGAPSOUTDATA.ptr())->getData();
     // TODO: WORKSPACERULE.gapsOut.value_or()
     auto        gapsOut     = *PGAPSOUT;
     static auto PBORDERSIZE = CConfigValue<Hyprlang::INT>("general:border_size");
-    static auto PSWIPEINVR  = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_invert");
+    static auto PSWIPEINVR  = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_touch_invert");
     EMIT_HOOK_EVENT_CANCELLABLE("touchDown", e);
 
     auto PMONITOR = g_pCompositor->getMonitorFromName(!e.device->boundOutput.empty() ? e.device->boundOutput : "");
 
-    PMONITOR = PMONITOR ? PMONITOR : g_pCompositor->m_pLastMonitor.get();
+    PMONITOR = PMONITOR ? PMONITOR : g_pCompositor->m_pLastMonitor.lock();
 
     g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
 
@@ -38,7 +39,6 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
         const auto PWORKSPACE = PMONITOR->activeWorkspace;
         const bool VERTANIMS  = PWORKSPACE->m_vRenderOffset.getConfig()->pValues->internalStyle == "slidevert" ||
             PWORKSPACE->m_vRenderOffset.getConfig()->pValues->internalStyle.starts_with("slidefadevert");
-        // TODO: support no_gaps_when_only?
         const double TARGETLEFT  = ((VERTANIMS ? gapsOut.top : gapsOut.left) + *PBORDERSIZE) / (VERTANIMS ? PMONITOR->vecSize.y : PMONITOR->vecSize.x);
         const double TARGETRIGHT = 1 - (((VERTANIMS ? gapsOut.bottom : gapsOut.right) + *PBORDERSIZE) / (VERTANIMS ? PMONITOR->vecSize.y : PMONITOR->vecSize.x));
         const double POSITION    = (VERTANIMS ? e.pos.y : e.pos.x);
@@ -53,8 +53,6 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
             return;
         }
     }
-
-    m_bLastInputTouch = true;
 
     m_sTouchData.touchFocusWindow  = m_pFoundWindowToFocus;
     m_sTouchData.touchFocusSurface = m_pFoundSurfaceToFocus;
@@ -78,11 +76,11 @@ void CInputManager::onTouchDown(ITouch::SDownEvent e) {
         return; // oops, nothing found.
 
     g_pSeatManager->sendTouchDown(m_sTouchData.touchFocusSurface.lock(), e.timeMs, e.touchID, local);
-
-    PROTO::idle->onActivity();
 }
 
 void CInputManager::onTouchUp(ITouch::SUpEvent e) {
+    m_bLastInputTouch = true;
+
     EMIT_HOOK_EVENT_CANCELLABLE("touchUp", e);
     if (m_sActiveSwipe.pWorkspaceBegin) {
         // If there was a swipe from this finger, end it.
@@ -96,6 +94,8 @@ void CInputManager::onTouchUp(ITouch::SUpEvent e) {
 }
 
 void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
+    m_bLastInputTouch = true;
+
     EMIT_HOOK_EVENT_CANCELLABLE("touchMove", e);
     if (m_sActiveSwipe.pWorkspaceBegin) {
         // Do nothing if this is using a different finger.
@@ -103,7 +103,7 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
             return;
         const bool VERTANIMS = m_sActiveSwipe.pWorkspaceBegin->m_vRenderOffset.getConfig()->pValues->internalStyle == "slidevert" ||
             m_sActiveSwipe.pWorkspaceBegin->m_vRenderOffset.getConfig()->pValues->internalStyle.starts_with("slidefadevert");
-        static auto PSWIPEINVR    = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_invert");
+        static auto PSWIPEINVR    = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_touch_invert");
         static auto PSWIPEDIST    = CConfigValue<Hyprlang::INT>("gestures:workspace_swipe_distance");
         const auto  SWIPEDISTANCE = std::clamp(*PSWIPEDIST, (int64_t)1LL, (int64_t)UINT32_MAX);
         // Handle the workspace swipe if there is one
@@ -123,7 +123,7 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
         return;
     }
     if (validMapped(m_sTouchData.touchFocusWindow)) {
-        const auto PMONITOR = g_pCompositor->getMonitorFromID(m_sTouchData.touchFocusWindow->m_iMonitorID);
+        const auto PMONITOR = m_sTouchData.touchFocusWindow->m_pMonitor.lock();
 
         g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
 
@@ -133,7 +133,7 @@ void CInputManager::onTouchMove(ITouch::SMotionEvent e) {
 
         g_pSeatManager->sendTouchMotion(e.timeMs, e.touchID, local);
     } else if (!m_sTouchData.touchFocusLS.expired()) {
-        const auto PMONITOR = g_pCompositor->getMonitorFromID(m_sTouchData.touchFocusLS->monitorID);
+        const auto PMONITOR = m_sTouchData.touchFocusLS->monitor.lock();
 
         g_pCompositor->warpCursorTo({PMONITOR->vecPosition.x + e.pos.x * PMONITOR->vecSize.x, PMONITOR->vecPosition.y + e.pos.y * PMONITOR->vecSize.y}, true);
 

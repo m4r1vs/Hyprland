@@ -3,22 +3,64 @@
 #include <memory>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
 #include "WaylandProtocol.hpp"
 #include "wlr-output-management-unstable-v1.hpp"
 #include "../helpers/signal/Signal.hpp"
+#include <aquamarine/output/Output.hpp>
 
 class CMonitor;
 
 class COutputHead;
 class COutputMode;
 
+struct SMonitorRule;
+
+enum eWlrOutputCommittedProperties : uint32_t {
+    OUTPUT_HEAD_COMMITTED_MODE          = (1 << 0),
+    OUTPUT_HEAD_COMMITTED_CUSTOM_MODE   = (1 << 1),
+    OUTPUT_HEAD_COMMITTED_POSITION      = (1 << 2),
+    OUTPUT_HEAD_COMMITTED_TRANSFORM     = (1 << 3),
+    OUTPUT_HEAD_COMMITTED_SCALE         = (1 << 4),
+    OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC = (1 << 5),
+};
+
+struct SWlrManagerOutputState {
+    uint32_t        committedProperties = 0;
+
+    WP<COutputMode> mode;
+    struct {
+        Vector2D size;
+        uint32_t refresh = 0;
+    } customMode;
+    Vector2D            position;
+    wl_output_transform transform    = WL_OUTPUT_TRANSFORM_NORMAL;
+    float               scale        = 1.F;
+    bool                adaptiveSync = false;
+    bool                enabled      = true;
+};
+
+struct SWlrManagerSavedOutputState {
+    uint32_t            committedProperties = 0;
+    Vector2D            resolution;
+    uint32_t            refresh = 0;
+    Vector2D            position;
+    wl_output_transform transform    = WL_OUTPUT_TRANSFORM_NORMAL;
+    float               scale        = 1.F;
+    bool                adaptiveSync = false;
+    bool                enabled      = true;
+};
+
 class COutputManager {
   public:
     COutputManager(SP<CZwlrOutputManagerV1> resource_);
 
     bool good();
-    void ensureMonitorSent(CMonitor* pMonitor);
+    void ensureMonitorSent(PHLMONITOR pMonitor);
     void sendDone();
+
+    // holds the states for this manager.
+    std::unordered_map<std::string, SWlrManagerSavedOutputState> monitorStates;
 
   private:
     SP<CZwlrOutputManagerV1>     resource;
@@ -28,21 +70,21 @@ class COutputManager {
 
     std::vector<WP<COutputHead>> heads;
 
-    void                         makeAndSendNewHead(CMonitor* pMonitor);
+    void                         makeAndSendNewHead(PHLMONITOR pMonitor);
     friend class COutputManagementProtocol;
 };
 
 class COutputMode {
   public:
-    COutputMode(SP<CZwlrOutputModeV1> resource_, wlr_output_mode* mode_);
+    COutputMode(SP<CZwlrOutputModeV1> resource_, SP<Aquamarine::SOutputMode> mode_);
 
-    bool             good();
-    wlr_output_mode* getMode();
-    void             sendAllData();
+    bool                        good();
+    SP<Aquamarine::SOutputMode> getMode();
+    void                        sendAllData();
 
   private:
-    SP<CZwlrOutputModeV1> resource;
-    wlr_output_mode*      mode = nullptr;
+    SP<CZwlrOutputModeV1>       resource;
+    WP<Aquamarine::SOutputMode> mode;
 
     friend class COutputHead;
     friend class COutputManagementProtocol;
@@ -50,18 +92,18 @@ class COutputMode {
 
 class COutputHead {
   public:
-    COutputHead(SP<CZwlrOutputHeadV1> resource_, CMonitor* pMonitor_);
+    COutputHead(SP<CZwlrOutputHeadV1> resource_, PHLMONITOR pMonitor_);
 
-    bool      good();
-    void      sendAllData(); // this has to be separate as we need to send the head first, then set the data
-    void      updateMode();
-    CMonitor* monitor();
+    bool       good();
+    void       sendAllData(); // this has to be separate as we need to send the head first, then set the data
+    void       updateMode();
+    PHLMONITOR monitor();
 
   private:
     SP<CZwlrOutputHeadV1>        resource;
-    CMonitor*                    pMonitor = nullptr;
+    PHLMONITORREF                pMonitor;
 
-    void                         makeAndSendNewMode(wlr_output_mode* mode);
+    void                         makeAndSendNewMode(SP<Aquamarine::SOutputMode> mode);
     void                         sendCurrentMode();
 
     std::vector<WP<COutputMode>> modes;
@@ -77,40 +119,15 @@ class COutputHead {
 
 class COutputConfigurationHead {
   public:
-    COutputConfigurationHead(SP<CZwlrOutputConfigurationHeadV1> resource_, CMonitor* pMonitor_);
+    COutputConfigurationHead(SP<CZwlrOutputConfigurationHeadV1> resource_, PHLMONITOR pMonitor_);
 
-    bool good();
+    bool                   good();
 
-    enum eCommittedProperties : uint32_t {
-        OUTPUT_HEAD_COMMITTED_MODE          = (1 << 0),
-        OUTPUT_HEAD_COMMITTED_CUSTOM_MODE   = (1 << 1),
-        OUTPUT_HEAD_COMMITTED_POSITION      = (1 << 2),
-        OUTPUT_HEAD_COMMITTED_TRANSFORM     = (1 << 3),
-        OUTPUT_HEAD_COMMITTED_SCALE         = (1 << 4),
-        OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC = (1 << 5),
-    };
-
-    uint32_t committedProperties = 0;
-
-    struct {
-        WP<COutputMode> mode;
-        struct {
-            Vector2D size;
-            uint32_t refresh = 0;
-        } customMode;
-        Vector2D            position;
-        wl_output_transform transform    = WL_OUTPUT_TRANSFORM_NORMAL;
-        float               scale        = 1.F;
-        bool                adaptiveSync = false;
-    } state;
+    SWlrManagerOutputState state;
 
   private:
     SP<CZwlrOutputConfigurationHeadV1> resource;
-    CMonitor*                          pMonitor = nullptr;
-
-    struct {
-        CHyprSignalListener monitorDestroy;
-    } listeners;
+    PHLMONITORREF                      pMonitor;
 
     friend class COutputConfiguration;
 };
@@ -134,6 +151,9 @@ class COutputManagementProtocol : public IWaylandProtocol {
     COutputManagementProtocol(const wl_interface* iface, const int& ver, const std::string& name);
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
+
+    // doesn't have to return one
+    SP<SWlrManagerSavedOutputState> getOutputStateFor(PHLMONITOR pMonitor);
 
   private:
     void destroyResource(COutputManager* resource);

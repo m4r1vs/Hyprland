@@ -1,19 +1,22 @@
 globber = run_command('sh', '-c', 'find . -name "*.cpp" | sort', check: true)
 src = globber.stdout().strip().split('\n')
 
-executable('Hyprland', src,
-  cpp_args: ['-DWLR_USE_UNSTABLE'],
+executable(
+  'Hyprland',
+  src,
   link_args: '-rdynamic',
   cpp_pch: 'pch/pch.hpp',
   dependencies: [
     server_protos,
+    aquamarine,
+    dependency('gbm'),
+    dependency('xcursor'),
     dependency('wayland-server'),
     dependency('wayland-client'),
-    wlroots.get_variable('wlroots'),
     dependency('cairo'),
-    dependency('hyprcursor'),
+    dependency('hyprcursor', version: '>=0.1.7'),
     dependency('hyprlang', version: '>= 0.3.2'),
-    dependency('hyprutils', version: '>= 0.1.1'),
+    dependency('hyprutils', version: '>= 0.2.3'),
     dependency('libdrm'),
     dependency('egl'),
     dependency('xkbcommon'),
@@ -27,7 +30,13 @@ executable('Hyprland', src,
     xcb_xfixes_dep,
     backtrace_dep,
     epoll_dep,
-    udis86,
+    gio_dep,
+    tracy,
+
+    # Try to find canihavesomecoffee's udis86 using pkgconfig
+    # vmt/udis86 does not provide a .pc file and won't be detected this way
+    # Falls back to using the subproject through udis86.wrap
+    dependency('udis86'),
 
     dependency('pixman-1'),
     dependency('gl', 'opengl'),
@@ -36,5 +45,5 @@ executable('Hyprland', src,
     dependency('pangocairo'),
     dependency('uuid'),
   ],
-  install : true
+  install: true,
 )

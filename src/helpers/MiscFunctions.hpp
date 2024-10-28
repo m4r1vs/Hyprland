@@ -3,14 +3,20 @@
 #include <optional>
 #include <string>
 #include <wayland-server.h>
-#include <wlr/util/box.h>
-#include "Vector2D.hpp"
+#include "math/Math.hpp"
 #include <vector>
 #include <format>
+#include "../SharedDefs.hpp"
+#include "../macros.hpp"
 
 struct SCallstackFrameInfo {
     void*       adr = nullptr;
     std::string desc;
+};
+
+struct SWorkspaceIDName {
+    WORKSPACEID id = WORKSPACE_INVALID;
+    std::string name;
 };
 
 std::string                      absolutePath(const std::string&, const std::string&);
@@ -19,7 +25,7 @@ void                             removeWLSignal(wl_listener*);
 std::string                      escapeJSONStrings(const std::string& str);
 bool                             isDirection(const std::string&);
 bool                             isDirection(const char&);
-int                              getWorkspaceIDFromString(const std::string&, std::string&);
+SWorkspaceIDName                 getWorkspaceIDNameFromString(const std::string&);
 std::optional<std::string>       cleanCmdForWorkspace(const std::string&, std::string);
 float                            vecToRectDistanceSquared(const Vector2D& vec, const Vector2D& p1, const Vector2D& p2);
 void                             logSystemInfo();
@@ -28,7 +34,6 @@ int64_t                          getPPIDof(int64_t pid);
 int64_t                          configStringToInt(const std::string&);
 Vector2D                         configStringToVector2D(const std::string&);
 std::optional<float>             getPlusMinusKeywordResult(std::string in, float relative);
-void                             matrixProjection(float mat[9], int w, int h, wl_output_transform tr);
 double                           normalizeAngleRad(double ang);
 std::vector<SCallstackFrameInfo> getBacktrace();
 void                             throwError(const std::string& err);

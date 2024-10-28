@@ -2,6 +2,7 @@
 #include "InputManager.hpp"
 #include "../../Compositor.hpp"
 #include "../../protocols/TextInputV3.hpp"
+#include "../../protocols/TextInputV1.hpp"
 #include "../../protocols/InputMethodV2.hpp"
 #include "../../protocols/core/Compositor.hpp"
 
@@ -9,7 +10,8 @@ CInputMethodRelay::CInputMethodRelay() {
     static auto P =
         g_pHookSystem->hookDynamic("keyboardFocus", [&](void* self, SCallbackInfo& info, std::any param) { onKeyboardFocus(std::any_cast<SP<CWLSurfaceResource>>(param)); });
 
-    listeners.newTIV3 = PROTO::textInputV3->events.newTextInput.registerListener([this](std::any ti) { onNewTextInput(ti); });
+    listeners.newTIV3 = PROTO::textInputV3->events.newTextInput.registerListener([this](std::any ti) { onNewTextInput(std::any_cast<WP<CTextInputV3>>(ti)); });
+    listeners.newTIV1 = PROTO::textInputV1->events.newTextInput.registerListener([this](std::any ti) { onNewTextInput(std::any_cast<WP<CTextInputV1>>(ti)); });
     listeners.newIME  = PROTO::ime->events.newIME.registerListener([this](std::any ime) { onNewIME(std::any_cast<SP<CInputMethodV2>>(ime)); });
 }
 
@@ -55,7 +57,7 @@ void CInputMethodRelay::onNewIME(SP<CInputMethodV2> pIME) {
     if (!g_pCompositor->m_pLastFocus)
         return;
 
-    for (auto& ti : m_vTextInputs) {
+    for (auto const& ti : m_vTextInputs) {
         if (ti->client() != g_pCompositor->m_pLastFocus->client())
             continue;
 
@@ -78,7 +80,7 @@ CTextInput* CInputMethodRelay::getFocusedTextInput() {
     if (!g_pCompositor->m_pLastFocus)
         return nullptr;
 
-    for (auto& ti : m_vTextInputs) {
+    for (auto const& ti : m_vTextInputs) {
         if (ti->focusedSurface() == g_pCompositor->m_pLastFocus)
             return ti.get();
     }
@@ -86,11 +88,11 @@ CTextInput* CInputMethodRelay::getFocusedTextInput() {
     return nullptr;
 }
 
-void CInputMethodRelay::onNewTextInput(std::any tiv3) {
-    m_vTextInputs.emplace_back(std::make_unique<CTextInput>(std::any_cast<WP<CTextInputV3>>(tiv3)));
+void CInputMethodRelay::onNewTextInput(WP<CTextInputV3> tiv3) {
+    m_vTextInputs.emplace_back(std::make_unique<CTextInput>(tiv3));
 }
 
-void CInputMethodRelay::onNewTextInput(STextInputV1* pTIV1) {
+void CInputMethodRelay::onNewTextInput(WP<CTextInputV1> pTIV1) {
     m_vTextInputs.emplace_back(std::make_unique<CTextInput>(pTIV1));
 }
 
@@ -99,25 +101,27 @@ void CInputMethodRelay::removeTextInput(CTextInput* pInput) {
 }
 
 void CInputMethodRelay::updateAllPopups() {
-    for (auto& p : m_vIMEPopups) {
+    for (auto const& p : m_vIMEPopups) {
         p->onCommit();
     }
 }
 
-void CInputMethodRelay::activateIME(CTextInput* pInput) {
+void CInputMethodRelay::activateIME(CTextInput* pInput, bool shouldCommit) {
     if (m_pIME.expired())
         return;
 
     m_pIME->activate();
-    commitIMEState(pInput);
+    if (shouldCommit)
+        commitIMEState(pInput);
 }
 
-void CInputMethodRelay::deactivateIME(CTextInput* pInput) {
+void CInputMethodRelay::deactivateIME(CTextInput* pInput, bool shouldCommit) {
     if (m_pIME.expired())
         return;
 
     m_pIME->deactivate();
-    commitIMEState(pInput);
+    if (shouldCommit)
+        commitIMEState(pInput);
 }
 
 void CInputMethodRelay::commitIMEState(CTextInput* pInput) {
@@ -136,14 +140,17 @@ void CInputMethodRelay::onKeyboardFocus(SP<CWLSurfaceResource> pSurface) {
 
     m_pLastKbFocus = pSurface;
 
-    for (auto& ti : m_vTextInputs) {
+    for (auto const& ti : m_vTextInputs) {
         if (!ti->focusedSurface())
             continue;
 
         ti->leave();
     }
 
-    for (auto& ti : m_vTextInputs) {
+    if (!pSurface)
+        return;
+
+    for (auto const& ti : m_vTextInputs) {
         if (!ti->isV3())
             continue;
 
@@ -155,7 +162,7 @@ void CInputMethodRelay::onKeyboardFocus(SP<CWLSurfaceResource> pSurface) {
 }
 
 CInputPopup* CInputMethodRelay::popupFromCoords(const Vector2D& point) {
-    for (auto& p : m_vIMEPopups) {
+    for (auto const& p : m_vIMEPopups) {
         if (p->isVecInPopup(point))
             return p.get();
     }
@@ -164,7 +171,7 @@ CInputPopup* CInputMethodRelay::popupFromCoords(const Vector2D& point) {
 }
 
 CInputPopup* CInputMethodRelay::popupFromSurface(const SP<CWLSurfaceResource> surface) {
-    for (auto& p : m_vIMEPopups) {
+    for (auto const& p : m_vIMEPopups) {
         if (p->getSurface() == surface)
             return p.get();
     }

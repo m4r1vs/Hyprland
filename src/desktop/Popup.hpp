@@ -18,21 +18,22 @@ class CPopup {
 
     ~CPopup();
 
-    Vector2D coordsRelativeToParent();
-    Vector2D coordsGlobal();
+    SP<CWLSurface> getT1Owner();
+    Vector2D       coordsRelativeToParent();
+    Vector2D       coordsGlobal();
 
-    Vector2D size();
+    Vector2D       size();
 
-    void     onNewPopup(SP<CXDGPopupResource> popup);
-    void     onDestroy();
-    void     onMap();
-    void     onUnmap();
-    void     onCommit(bool ignoreSiblings = false);
-    void     onReposition();
+    void           onNewPopup(SP<CXDGPopupResource> popup);
+    void           onDestroy();
+    void           onMap();
+    void           onUnmap();
+    void           onCommit(bool ignoreSiblings = false);
+    void           onReposition();
 
-    void     recheckTree();
+    void           recheckTree();
 
-    bool     visible();
+    bool           visible();
 
     // will also loop over this node
     void    breadthfirst(std::function<void(CPopup*, void*)> fn, void* data);
@@ -60,8 +61,8 @@ class CPopup {
     bool                  m_bMapped = false;
 
     //
-    std::vector<std::unique_ptr<CPopup>> m_vChildren;
-    std::unique_ptr<CSubsurface>         m_pSubsurfaceHead;
+    std::vector<SP<CPopup>>      m_vChildren;
+    std::unique_ptr<CSubsurface> m_pSubsurfaceHead;
 
     struct {
         CHyprSignalListener newPopup;
@@ -74,11 +75,11 @@ class CPopup {
     } listeners;
 
     void        initAllSignals();
-    void        unconstrain();
+    void        reposition();
     void        recheckChildrenRecursive();
     void        sendScale();
 
     Vector2D    localToGlobal(const Vector2D& rel);
     Vector2D    t1ParentCoords();
-    static void bfHelper(std::vector<CPopup*> nodes, std::function<void(CPopup*, void*)> fn, void* data);
+    static void bfHelper(std::vector<CPopup*> const& nodes, std::function<void(CPopup*, void*)> fn, void* data);
 };

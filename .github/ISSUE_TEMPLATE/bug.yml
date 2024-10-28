@@ -2,21 +2,25 @@ name: Bug Report
 description: Something is not working right
 labels: ["bug"]
 body:
-  - type: markdown
+  - type: checkboxes
     attributes:
-      value: |
-        Before opening a new issue, take a moment to search through the current open ones.
-
-        ---
+      label: Already reported ? *
+      description: Before opening a new bug report, please take a moment to search through the current open and closed issues to check if it already exists.
+      options:
+      - label: I have searched the existing open and closed issues.
+        required: true
 
   - type: dropdown
     id: type
     attributes:
-      label: Bug or Regression?
-      description: Is this a bug or a regression?
+      label: Regression?
+      description: |
+        Regression means that something used to work but no longer does.
+        **BEFORE CONTINUING**, please check if this bug is a regression or not, and if it is, we need you to bisect with the help of the wiki: https://wiki.hyprland.org/Crashes-and-Bugs/#bisecting-an-issue
+      multiple: true
       options:
-        - Bug
-        - Regression
+        - "Yes"
+        - "No"
     validations:
       required: true
 
@@ -25,10 +29,10 @@ body:
     attributes:
       label: System Info and Version
       description: |
-        Paste the output of `hyprctl systeminfo -c` here (If you are on a 
-        version that shows you help menu, omit the `-c` and attach config files
-        to the issue). If you have configs outside of the main config shown 
-        here, please attach.
+        Paste the output of `hyprctl systeminfo -c` here. If you can't
+        launch Hyprland, paste the output of `Hyprland --systeminfo`.
+        If `Hyprland --systeminfo` errors out (added in 0.44.0), find
+        and paste the Hyprland version manually.
       value: "<details>
         <summary>System/Version info</summary>
 

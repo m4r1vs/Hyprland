@@ -42,7 +42,7 @@ class CLayerSurface {
     bool                       mapped = false;
     uint32_t                   layer  = 0;
 
-    int                        monitorID = -1;
+    PHLMONITORREF              monitor;
 
     bool                       fadingOut     = false;
     bool                       readyToDelete = false;
@@ -51,10 +51,11 @@ class CLayerSurface {
 
     bool                       forceBlur        = false;
     bool                       forceBlurPopups  = false;
-    int                        xray             = -1;
+    int64_t                    xray             = -1;
     bool                       ignoreAlpha      = false;
     float                      ignoreAlphaValue = 0.f;
     bool                       dimAround        = false;
+    int64_t                    order            = 0;
 
     std::optional<std::string> animationStyle;
 
@@ -69,6 +70,7 @@ class CLayerSurface {
     void                       onMap();
     void                       onUnmap();
     void                       onCommit();
+    MONITORID                  monitorID();
 
   private:
     struct {
@@ -82,6 +84,6 @@ class CLayerSurface {
 
     // For the list lookup
     bool operator==(const CLayerSurface& rhs) const {
-        return layerSurface == rhs.layerSurface && monitorID == rhs.monitorID;
+        return layerSurface == rhs.layerSurface && monitor == rhs.monitor;
     }
 };

@@ -6,22 +6,12 @@
 #include "Seat.hpp"
 #include "Compositor.hpp"
 
-#define LOGM PROTO::data->protoLog
-
 CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataSource> source_) : source(source_), resource(resource_) {
     if (!good())
         return;
 
-    resource->setDestroy([this](CWlDataOffer* r) {
-        if (!dead)
-            PROTO::data->completeDrag();
-        PROTO::data->destroyResource(this);
-    });
-    resource->setOnDestroy([this](CWlDataOffer* r) {
-        if (!dead)
-            PROTO::data->completeDrag();
-        PROTO::data->destroyResource(this);
-    });
+    resource->setDestroy([this](CWlDataOffer* r) { PROTO::data->destroyResource(this); });
+    resource->setOnDestroy([this](CWlDataOffer* r) { PROTO::data->destroyResource(this); });
 
     resource->setAccept([this](CWlDataOffer* r, uint32_t serial, const char* mime) {
         if (!source) {
@@ -77,6 +67,13 @@ CWLDataOfferResource::CWLDataOfferResource(SP<CWlDataOffer> resource_, SP<IDataS
     });
 }
 
+CWLDataOfferResource::~CWLDataOfferResource() {
+    if (!source || !source->hasDnd() || dead)
+        return;
+
+    source->sendDndFinished();
+}
+
 bool CWLDataOfferResource::good() {
     return resource->resource();
 }
@@ -85,12 +82,21 @@ void CWLDataOfferResource::sendData() {
     if (!source)
         return;
 
-    if (resource->version() >= 3) {
-        resource->sendSourceActions(7);
-        resource->sendAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE);
+    const auto SOURCEACTIONS = source->actions();
+
+    if (resource->version() >= 3 && SOURCEACTIONS > 0) {
+        resource->sendSourceActions(SOURCEACTIONS);
+        if (SOURCEACTIONS & WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE)
+            resource->sendAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE);
+        else if (SOURCEACTIONS & WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY)
+            resource->sendAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+        else {
+            LOGM(ERR, "Client bug? dnd source has no action move or copy. Sending move, f this.");
+            resource->sendAction(WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE);
+        }
     }
 
-    for (auto& m : source->mimes()) {
+    for (auto const& m : source->mimes()) {
         LOGM(LOG, " | offer {:x} supports mime {}", (uintptr_t)this, m);
         resource->sendOffer(m.c_str());
     }
@@ -116,7 +122,7 @@ CWLDataSourceResource::CWLDataSourceResource(SP<CWlDataSource> resource_, SP<CWL
     resource->setOffer([this](CWlDataSource* r, const char* mime) { mimeTypes.push_back(mime); });
     resource->setSetActions([this](CWlDataSource* r, uint32_t a) {
         LOGM(LOG, "DataSource {:x} actions {}", (uintptr_t)this, a);
-        actions = (wl_data_device_manager_dnd_action)a;
+        supportedActions = a;
     });
 }
 
@@ -183,6 +189,7 @@ void CWLDataSourceResource::sendDndDropPerformed() {
     if (resource->version() < 3)
         return;
     resource->sendDndDropPerformed();
+    dropped = true;
 }
 
 void CWLDataSourceResource::sendDndFinished() {
@@ -197,6 +204,10 @@ void CWLDataSourceResource::sendDndAction(wl_data_device_manager_dnd_action a) {
     resource->sendAction(a);
 }
 
+uint32_t CWLDataSourceResource::actions() {
+    return supportedActions;
+}
+
 CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : resource(resource_) {
     if (!good())
         return;
@@ -206,7 +217,7 @@ CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : reso
 
     pClient = resource->client();
 
-    resource->setSetSelection([this](CWlDataDevice* r, wl_resource* sourceR, uint32_t serial) {
+    resource->setSetSelection([](CWlDataDevice* r, wl_resource* sourceR, uint32_t serial) {
         auto source = sourceR ? CWLDataSourceResource::fromResource(sourceR) : CSharedPointer<CWLDataSourceResource>{};
         if (!source) {
             LOGM(LOG, "Reset selection received");
@@ -222,7 +233,7 @@ CWLDataDeviceResource::CWLDataDeviceResource(SP<CWlDataDevice> resource_) : reso
         g_pSeatManager->setCurrentSelection(source);
     });
 
-    resource->setStartDrag([this](CWlDataDevice* r, wl_resource* sourceR, wl_resource* origin, wl_resource* icon, uint32_t serial) {
+    resource->setStartDrag([](CWlDataDevice* r, wl_resource* sourceR, wl_resource* origin, wl_resource* icon, uint32_t serial) {
         auto source = CWLDataSourceResource::fromResource(sourceR);
         if (!source) {
             LOGM(ERR, "No source in drag");
@@ -316,7 +327,7 @@ CWLDataDeviceManagerResource::CWLDataDeviceManagerResource(SP<CWlDataDeviceManag
 
         RESOURCE->self = RESOURCE;
 
-        for (auto& s : sources) {
+        for (auto const& s : sources) {
             if (!s)
                 continue;
             s->device = RESOURCE;
@@ -400,7 +411,7 @@ void CWLDataDeviceProtocol::onDestroyDataSource(WP<CWLDataSourceResource> source
 }
 
 void CWLDataDeviceProtocol::setSelection(SP<IDataSource> source) {
-    for (auto& o : m_vOffers) {
+    for (auto const& o : m_vOffers) {
         if (o->source && o->source->hasDnd())
             continue;
         o->dead = true;
@@ -449,7 +460,7 @@ void CWLDataDeviceProtocol::updateSelection() {
 }
 
 void CWLDataDeviceProtocol::onKeyboardFocus() {
-    for (auto& o : m_vOffers) {
+    for (auto const& o : m_vOffers) {
         o->dead = true;
     }
 
@@ -477,12 +488,12 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
     if (dragSurface) {
         dnd.dndSurfaceDestroy = dragSurface->events.destroy.registerListener([this](std::any d) { abortDrag(); });
         dnd.dndSurfaceCommit  = dragSurface->events.commit.registerListener([this](std::any d) {
-            if (dnd.dndSurface->current.buffer && !dnd.dndSurface->mapped) {
+            if (dnd.dndSurface->current.texture && !dnd.dndSurface->mapped) {
                 dnd.dndSurface->map();
                 return;
             }
 
-            if (dnd.dndSurface->current.buffer <= 0 && dnd.dndSurface->mapped) {
+            if (dnd.dndSurface->current.texture <= 0 && dnd.dndSurface->mapped) {
                 dnd.dndSurface->unmap();
                 return;
             }
@@ -515,7 +526,10 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
             if (!box.has_value())
                 return;
 
-            dnd.focusedDevice->sendMotion(0 /* this is a hack */, V - box->pos());
+            timespec timeNow;
+            clock_gettime(CLOCK_MONOTONIC, &timeNow);
+
+            dnd.focusedDevice->sendMotion(timeNow.tv_sec * 1000 + timeNow.tv_nsec / 1000000, V - box->pos());
             LOGM(LOG, "Drag motion {}", V - box->pos());
         }
     });
@@ -543,7 +557,7 @@ void CWLDataDeviceProtocol::initiateDrag(WP<CWLDataSourceResource> currentSource
 }
 
 void CWLDataDeviceProtocol::updateDrag() {
-    if (!dnd.currentSource)
+    if (!dndActive())
         return;
 
     if (dnd.focusedDevice)
@@ -592,7 +606,11 @@ void CWLDataDeviceProtocol::dropDrag() {
         return;
     }
 
-    dnd.currentSource->sendDndDropPerformed();
+    if (!wasDragSuccessful()) {
+        abortDrag();
+        return;
+    }
+
     dnd.focusedDevice->sendDrop();
     dnd.focusedDevice->sendLeave();
 
@@ -603,17 +621,36 @@ void CWLDataDeviceProtocol::dropDrag() {
     dnd.overriddenCursor = false;
 }
 
+bool CWLDataDeviceProtocol::wasDragSuccessful() {
+    if (!dnd.focusedDevice || !dnd.currentSource)
+        return false;
+
+    for (auto const& o : m_vOffers) {
+        if (o->dead || !o->source || !o->source->hasDnd())
+            continue;
+
+        if (o->recvd || o->accepted)
+            return true;
+    }
+
+    return false;
+}
+
 void CWLDataDeviceProtocol::completeDrag() {
     resetDndState();
 
-    if (!dnd.focusedDevice || !dnd.currentSource)
+    if (!dnd.focusedDevice && !dnd.currentSource)
         return;
 
-    dnd.currentSource->sendDndFinished();
+    if (dnd.currentSource) {
+        dnd.currentSource->sendDndDropPerformed();
+        dnd.currentSource->sendDndFinished();
+    }
 
     dnd.focusedDevice.reset();
     dnd.currentSource.reset();
 
+    g_pInputManager->simulateMouseMovement();
     g_pSeatManager->resendEnterEvents();
 }
 
@@ -624,26 +661,29 @@ void CWLDataDeviceProtocol::abortDrag() {
         g_pInputManager->unsetCursorImage();
     dnd.overriddenCursor = false;
 
-    if (!dnd.focusedDevice || !dnd.currentSource)
+    if (!dnd.focusedDevice && !dnd.currentSource)
         return;
 
-    dnd.focusedDevice->sendLeave();
-    dnd.currentSource->cancelled();
+    if (dnd.focusedDevice)
+        dnd.focusedDevice->sendLeave();
+    if (dnd.currentSource)
+        dnd.currentSource->cancelled();
 
     dnd.focusedDevice.reset();
     dnd.currentSource.reset();
 
+    g_pInputManager->simulateMouseMovement();
     g_pSeatManager->resendEnterEvents();
 }
 
-void CWLDataDeviceProtocol::renderDND(CMonitor* pMonitor, timespec* when) {
-    if (!dnd.dndSurface || !dnd.dndSurface->current.buffer || !dnd.dndSurface->current.buffer->texture)
+void CWLDataDeviceProtocol::renderDND(PHLMONITOR pMonitor, timespec* when) {
+    if (!dnd.dndSurface || !dnd.dndSurface->current.texture)
         return;
 
     const auto POS = g_pInputManager->getMouseCoordsInternal();
 
     CBox       box = CBox{POS, dnd.dndSurface->current.size}.translate(-pMonitor->vecPosition + g_pPointerManager->cursorSizeLogical() / 2.F).scale(pMonitor->scale);
-    g_pHyprOpenGL->renderTexture(dnd.dndSurface->current.buffer->texture, &box, 1.F);
+    g_pHyprOpenGL->renderTexture(dnd.dndSurface->current.texture, &box, 1.F);
 
     box = CBox{POS, dnd.dndSurface->current.size}.translate(g_pPointerManager->cursorSizeLogical() / 2.F);
     g_pHyprRenderer->damageBox(&box);
@@ -652,5 +692,5 @@ void CWLDataDeviceProtocol::renderDND(CMonitor* pMonitor, timespec* when) {
 }
 
 bool CWLDataDeviceProtocol::dndActive() {
-    return dnd.currentSource;
+    return dnd.currentSource && dnd.mouseButton /* test a member of the state to ensure it's also present */;
 }

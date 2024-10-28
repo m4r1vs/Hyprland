@@ -7,24 +7,12 @@
 #include "../../protocols/InputMethodV2.hpp"
 #include "../../protocols/core/Compositor.hpp"
 
-CTextInput::CTextInput(STextInputV1* ti) : pV1Input(ti) {
-    ti->pTextInput = this;
+CTextInput::CTextInput(WP<CTextInputV1> ti) : pV1Input(ti) {
     initCallbacks();
 }
 
 CTextInput::CTextInput(WP<CTextInputV3> ti) : pV3Input(ti) {
     initCallbacks();
-}
-
-CTextInput::~CTextInput() {
-    if (pV1Input)
-        pV1Input->pTextInput = nullptr;
-}
-
-void CTextInput::tiV1Destroyed() {
-    pV1Input = nullptr;
-
-    g_pInputManager->m_sIMERelay.removeTextInput(this);
 }
 
 void CTextInput::initCallbacks() {
@@ -34,35 +22,34 @@ void CTextInput::initCallbacks() {
         listeners.enable  = INPUT->events.enable.registerListener([this](std::any p) { onEnabled(); });
         listeners.disable = INPUT->events.disable.registerListener([this](std::any p) { onDisabled(); });
         listeners.commit  = INPUT->events.onCommit.registerListener([this](std::any p) { onCommit(); });
+        listeners.reset   = INPUT->events.reset.registerListener([this](std::any p) { onReset(); });
         listeners.destroy = INPUT->events.destroy.registerListener([this](std::any p) {
-            const auto INPUT = pV3Input.lock();
-            if (INPUT && INPUT->current.enabled && focusedSurface())
-                g_pInputManager->m_sIMERelay.deactivateIME(this);
+            listeners.surfaceUnmap.reset();
+            listeners.surfaceDestroy.reset();
             g_pInputManager->m_sIMERelay.removeTextInput(this);
+            if (!g_pInputManager->m_sIMERelay.getFocusedTextInput())
+                g_pInputManager->m_sIMERelay.deactivateIME(this);
         });
+
+        if (!g_pCompositor->m_pLastFocus.expired() && g_pCompositor->m_pLastFocus->client() == INPUT->client())
+            enter(g_pCompositor->m_pLastFocus.lock());
     } else {
-        hyprListener_textInputEnable.initCallback(
-            &pV1Input->sEnable, [this](void* owner, void* data) { onEnabled(); }, this, "textInput");
+        const auto INPUT = pV1Input.lock();
 
-        hyprListener_textInputCommit.initCallback(
-            &pV1Input->sCommit, [this](void* owner, void* data) { onCommit(); }, this, "textInput");
-
-        hyprListener_textInputDisable.initCallback(
-            &pV1Input->sDisable, [this](void* owner, void* data) { onDisabled(); }, this, "textInput");
-
-        hyprListener_textInputDestroy.initCallback(
-            &pV1Input->sDestroy,
-            [this](void* owner, void* data) {
-                hyprListener_textInputCommit.removeCallback();
-                hyprListener_textInputDestroy.removeCallback();
-                hyprListener_textInputDisable.removeCallback();
-                hyprListener_textInputEnable.removeCallback();
-                listeners.surfaceUnmap.reset();
-                listeners.surfaceDestroy.reset();
-
-                g_pInputManager->m_sIMERelay.removeTextInput(this);
-            },
-            this, "textInput");
+        listeners.enable  = INPUT->events.enable.registerListener([this](std::any p) {
+            const auto SURFACE = std::any_cast<SP<CWLSurfaceResource>>(p);
+            onEnabled(SURFACE);
+        });
+        listeners.disable = INPUT->events.disable.registerListener([this](std::any p) { onDisabled(); });
+        listeners.commit  = INPUT->events.onCommit.registerListener([this](std::any p) { onCommit(); });
+        listeners.reset   = INPUT->events.reset.registerListener([this](std::any p) { onReset(); });
+        listeners.destroy = INPUT->events.destroy.registerListener([this](std::any p) {
+            listeners.surfaceUnmap.reset();
+            listeners.surfaceDestroy.reset();
+            g_pInputManager->m_sIMERelay.removeTextInput(this);
+            if (!g_pInputManager->m_sIMERelay.getFocusedTextInput())
+                g_pInputManager->m_sIMERelay.deactivateIME(this);
+        });
     }
 }
 
@@ -92,16 +79,35 @@ void CTextInput::onDisabled() {
         return;
     }
 
-    if (!focusedSurface())
-        return;
-
     if (!isV3())
         leave();
 
     listeners.surfaceUnmap.reset();
     listeners.surfaceDestroy.reset();
 
+    if (!focusedSurface())
+        return;
+
+    const auto PFOCUSEDTI = g_pInputManager->m_sIMERelay.getFocusedTextInput();
+    if (!PFOCUSEDTI || PFOCUSEDTI != this)
+        return;
+
     g_pInputManager->m_sIMERelay.deactivateIME(this);
+}
+
+void CTextInput::onReset() {
+    if (g_pInputManager->m_sIMERelay.m_pIME.expired())
+        return;
+
+    if (!focusedSurface())
+        return;
+
+    const auto PFOCUSEDTI = g_pInputManager->m_sIMERelay.getFocusedTextInput();
+    if (!PFOCUSEDTI || PFOCUSEDTI != this)
+        return;
+
+    g_pInputManager->m_sIMERelay.deactivateIME(this, false);
+    g_pInputManager->m_sIMERelay.activateIME(this);
 }
 
 void CTextInput::onCommit() {
@@ -110,7 +116,7 @@ void CTextInput::onCommit() {
         return;
     }
 
-    if (!(isV3() ? pV3Input->current.enabled : pV1Input->active)) {
+    if (!(isV3() ? pV3Input->current.enabled.value : pV1Input->active)) {
         Debug::log(WARN, "Disabled TextInput commit?");
         return;
     }
@@ -124,11 +130,11 @@ void CTextInput::setFocusedSurface(SP<CWLSurfaceResource> pSurface) {
 
     pFocusedSurface = pSurface;
 
-    listeners.surfaceUnmap.reset();
-    listeners.surfaceDestroy.reset();
-
     if (!pSurface)
         return;
+
+    listeners.surfaceUnmap.reset();
+    listeners.surfaceDestroy.reset();
 
     listeners.surfaceUnmap = pSurface->events.unmap.registerListener([this](std::any d) {
         Debug::log(LOG, "Unmap TI owner1");
@@ -138,6 +144,16 @@ void CTextInput::setFocusedSurface(SP<CWLSurfaceResource> pSurface) {
         pFocusedSurface.reset();
         listeners.surfaceUnmap.reset();
         listeners.surfaceDestroy.reset();
+
+        if (isV3() && !pV3Input.expired() && pV3Input->current.enabled.value) {
+            pV3Input->pending.enabled.value            = false;
+            pV3Input->pending.enabled.isDisablePending = false;
+            pV3Input->pending.enabled.isEnablePending  = false;
+            pV3Input->current.enabled.value            = false;
+        }
+
+        if (!g_pInputManager->m_sIMERelay.getFocusedTextInput())
+            g_pInputManager->m_sIMERelay.deactivateIME(this);
     });
 
     listeners.surfaceDestroy = pSurface->events.destroy.registerListener([this](std::any d) {
@@ -148,11 +164,21 @@ void CTextInput::setFocusedSurface(SP<CWLSurfaceResource> pSurface) {
         pFocusedSurface.reset();
         listeners.surfaceUnmap.reset();
         listeners.surfaceDestroy.reset();
+
+        if (isV3() && !pV3Input.expired() && pV3Input->current.enabled.value) {
+            pV3Input->pending.enabled.value            = false;
+            pV3Input->pending.enabled.isDisablePending = false;
+            pV3Input->pending.enabled.isEnablePending  = false;
+            pV3Input->current.enabled.value            = false;
+        }
+
+        if (!g_pInputManager->m_sIMERelay.getFocusedTextInput())
+            g_pInputManager->m_sIMERelay.deactivateIME(this);
     });
 }
 
 bool CTextInput::isV3() {
-    return !pV1Input;
+    return pV3Input && !pV1Input;
 }
 
 void CTextInput::enter(SP<CWLSurfaceResource> pSurface) {
@@ -162,10 +188,8 @@ void CTextInput::enter(SP<CWLSurfaceResource> pSurface) {
     if (pSurface == focusedSurface())
         return;
 
-    if (focusedSurface()) {
+    if (focusedSurface())
         leave();
-        setFocusedSurface(nullptr);
-    }
 
     enterLocks++;
     if (enterLocks != 1) {
@@ -177,8 +201,7 @@ void CTextInput::enter(SP<CWLSurfaceResource> pSurface) {
     if (isV3())
         pV3Input->enter(pSurface);
     else {
-        zwp_text_input_v1_send_enter(pV1Input->resourceImpl, pSurface->getResource()->resource());
-        pV1Input->active = true;
+        pV1Input->enter(pSurface);
     }
 
     setFocusedSurface(pSurface);
@@ -194,12 +217,10 @@ void CTextInput::leave() {
         enterLocks = 0;
     }
 
-    if (isV3() && focusedSurface())
+    if (isV3())
         pV3Input->leave(focusedSurface());
-    else if (focusedSurface() && pV1Input) {
-        zwp_text_input_v1_send_leave(pV1Input->resourceImpl);
-        pV1Input->active = false;
-    }
+    else
+        pV1Input->leave();
 
     setFocusedSurface(nullptr);
 
@@ -211,11 +232,11 @@ SP<CWLSurfaceResource> CTextInput::focusedSurface() {
 }
 
 wl_client* CTextInput::client() {
-    return isV3() ? pV3Input->client() : pV1Input->client;
+    return isV3() ? pV3Input->client() : pV1Input->client();
 }
 
 void CTextInput::commitStateToIME(SP<CInputMethodV2> ime) {
-    if (isV3()) {
+    if (isV3() && !pV3Input.expired()) {
         const auto INPUT = pV3Input.lock();
 
         if (INPUT->current.surrounding.updated)
@@ -225,14 +246,16 @@ void CTextInput::commitStateToIME(SP<CInputMethodV2> ime) {
 
         if (INPUT->current.contentType.updated)
             ime->textContentType(INPUT->current.contentType.hint, INPUT->current.contentType.purpose);
-    } else {
-        if (pV1Input->pendingSurrounding.isPending)
-            ime->surroundingText(pV1Input->pendingSurrounding.text, pV1Input->pendingSurrounding.cursor, pV1Input->pendingSurrounding.anchor);
+    } else if (!pV1Input.expired()) {
+        const auto INPUT = pV1Input.lock();
+
+        if (INPUT->pendingSurrounding.isPending)
+            ime->surroundingText(INPUT->pendingSurrounding.text, INPUT->pendingSurrounding.cursor, INPUT->pendingSurrounding.anchor);
 
         ime->textChangeCause(ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_INPUT_METHOD);
 
         if (pV1Input->pendingContentType.isPending)
-            ime->textContentType((zwpTextInputV3ContentHint)pV1Input->pendingContentType.hint, (zwpTextInputV3ContentPurpose)pV1Input->pendingContentType.purpose);
+            ime->textContentType((zwpTextInputV3ContentHint)INPUT->pendingContentType.hint, (zwpTextInputV3ContentPurpose)INPUT->pendingContentType.purpose);
     }
 
     g_pInputManager->m_sIMERelay.updateAllPopups();
@@ -255,25 +278,27 @@ void CTextInput::updateIMEState(SP<CInputMethodV2> ime) {
 
         INPUT->sendDone();
     } else {
+        const auto INPUT = pV1Input.lock();
+
         if (ime->current.preeditString.committed) {
-            zwp_text_input_v1_send_preedit_cursor(pV1Input->resourceImpl, ime->current.preeditString.begin);
-            zwp_text_input_v1_send_preedit_styling(pV1Input->resourceImpl, 0, std::string(ime->current.preeditString.string).length(), ZWP_TEXT_INPUT_V1_PREEDIT_STYLE_HIGHLIGHT);
-            zwp_text_input_v1_send_preedit_string(pV1Input->resourceImpl, pV1Input->serial, ime->current.preeditString.string.c_str(), "");
+            INPUT->preeditCursor(ime->current.preeditString.begin);
+            INPUT->preeditStyling(0, std::string(ime->current.preeditString.string).length(), ZWP_TEXT_INPUT_V1_PREEDIT_STYLE_HIGHLIGHT);
+            INPUT->preeditString(pV1Input->serial, ime->current.preeditString.string.c_str(), "");
         } else {
-            zwp_text_input_v1_send_preedit_cursor(pV1Input->resourceImpl, ime->current.preeditString.begin);
-            zwp_text_input_v1_send_preedit_styling(pV1Input->resourceImpl, 0, 0, ZWP_TEXT_INPUT_V1_PREEDIT_STYLE_HIGHLIGHT);
-            zwp_text_input_v1_send_preedit_string(pV1Input->resourceImpl, pV1Input->serial, "", "");
+            INPUT->preeditCursor(0);
+            INPUT->preeditStyling(0, 0, ZWP_TEXT_INPUT_V1_PREEDIT_STYLE_HIGHLIGHT);
+            INPUT->preeditString(pV1Input->serial, "", "");
         }
 
         if (ime->current.committedString.committed)
-            zwp_text_input_v1_send_commit_string(pV1Input->resourceImpl, pV1Input->serial, ime->current.committedString.string.c_str());
+            INPUT->commitString(pV1Input->serial, ime->current.committedString.string.c_str());
 
         if (ime->current.deleteSurrounding.committed) {
-            zwp_text_input_v1_send_delete_surrounding_text(pV1Input->resourceImpl, std::string(ime->current.preeditString.string).length() - ime->current.deleteSurrounding.before,
-                                                           ime->current.deleteSurrounding.after + ime->current.deleteSurrounding.before);
+            INPUT->deleteSurroundingText(std::string(ime->current.preeditString.string).length() - ime->current.deleteSurrounding.before,
+                                         ime->current.deleteSurrounding.after + ime->current.deleteSurrounding.before);
 
             if (ime->current.preeditString.committed)
-                zwp_text_input_v1_send_commit_string(pV1Input->resourceImpl, pV1Input->serial, ime->current.preeditString.string.c_str());
+                INPUT->commitString(pV1Input->serial, ime->current.preeditString.string.c_str());
         }
     }
 }

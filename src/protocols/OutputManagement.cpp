@@ -2,7 +2,7 @@
 #include <algorithm>
 #include "../Compositor.hpp"
 
-#define LOGM PROTO::outputManagement->protoLog
+using namespace Aquamarine;
 
 COutputManager::COutputManager(SP<CZwlrOutputManagerV1> resource_) : resource(resource_) {
     if (!good())
@@ -28,13 +28,13 @@ COutputManager::COutputManager(SP<CZwlrOutputManagerV1> resource_) : resource(re
     });
 
     // send all heads at start
-    for (auto& m : g_pCompositor->m_vRealMonitors) {
-        if (m.get() == g_pCompositor->m_pUnsafeOutput)
+    for (auto const& m : g_pCompositor->m_vRealMonitors) {
+        if (m == g_pCompositor->m_pUnsafeOutput)
             continue;
 
         LOGM(LOG, " | sending output head for {}", m->szName);
 
-        makeAndSendNewHead(m.get());
+        makeAndSendNewHead(m);
     }
 
     sendDone();
@@ -44,7 +44,7 @@ bool COutputManager::good() {
     return resource->resource();
 }
 
-void COutputManager::makeAndSendNewHead(CMonitor* pMonitor) {
+void COutputManager::makeAndSendNewHead(PHLMONITOR pMonitor) {
     if (stopped)
         return;
 
@@ -63,11 +63,11 @@ void COutputManager::makeAndSendNewHead(CMonitor* pMonitor) {
     RESOURCE->sendAllData();
 }
 
-void COutputManager::ensureMonitorSent(CMonitor* pMonitor) {
+void COutputManager::ensureMonitorSent(PHLMONITOR pMonitor) {
     if (pMonitor == g_pCompositor->m_pUnsafeOutput)
         return;
 
-    for (auto& hw : heads) {
+    for (auto const& hw : heads) {
         auto h = hw.lock();
 
         if (!h)
@@ -86,7 +86,7 @@ void COutputManager::sendDone() {
     resource->sendDone(wl_display_next_serial(g_pCompositor->m_sWLDisplay));
 }
 
-COutputHead::COutputHead(SP<CZwlrOutputHeadV1> resource_, CMonitor* pMonitor_) : resource(resource_), pMonitor(pMonitor_) {
+COutputHead::COutputHead(SP<CZwlrOutputHeadV1> resource_, PHLMONITOR pMonitor_) : resource(resource_), pMonitor(pMonitor_) {
     if (!good())
         return;
 
@@ -96,7 +96,7 @@ COutputHead::COutputHead(SP<CZwlrOutputHeadV1> resource_, CMonitor* pMonitor_) :
     listeners.monitorDestroy = pMonitor->events.destroy.registerListener([this](std::any d) {
         resource->sendFinished();
 
-        for (auto& mw : modes) {
+        for (auto const& mw : modes) {
             auto m = mw.lock();
 
             if (!m)
@@ -105,8 +105,8 @@ COutputHead::COutputHead(SP<CZwlrOutputHeadV1> resource_, CMonitor* pMonitor_) :
             m->resource->sendFinished();
         }
 
-        pMonitor = nullptr;
-        for (auto& m : PROTO::outputManagement->m_vManagers) {
+        pMonitor.reset();
+        for (auto const& m : PROTO::outputManagement->m_vManagers) {
             m->sendDone();
         }
     });
@@ -123,8 +123,8 @@ void COutputHead::sendAllData() {
 
     resource->sendName(pMonitor->szName.c_str());
     resource->sendDescription(pMonitor->szDescription.c_str());
-    if (pMonitor->output->phys_width > 0 && pMonitor->output->phys_height > 0)
-        resource->sendPhysicalSize(pMonitor->output->phys_width, pMonitor->output->phys_height);
+    if (pMonitor->output->physicalSize.x > 0 && pMonitor->output->physicalSize.y > 0)
+        resource->sendPhysicalSize(pMonitor->output->physicalSize.x, pMonitor->output->physicalSize.y);
     resource->sendEnabled(pMonitor->m_bEnabled);
 
     if (pMonitor->m_bEnabled) {
@@ -133,12 +133,12 @@ void COutputHead::sendAllData() {
         resource->sendScale(wl_fixed_from_double(pMonitor->scale));
     }
 
-    if (pMonitor->output->make && VERSION >= 2)
-        resource->sendMake(pMonitor->output->make);
-    if (pMonitor->output->model && VERSION >= 2)
-        resource->sendModel(pMonitor->output->model);
-    if (pMonitor->output->serial && VERSION >= 2)
-        resource->sendSerialNumber(pMonitor->output->serial);
+    if (!pMonitor->output->make.empty() && VERSION >= 2)
+        resource->sendMake(pMonitor->output->make.c_str());
+    if (!pMonitor->output->model.empty() && VERSION >= 2)
+        resource->sendModel(pMonitor->output->model.c_str());
+    if (!pMonitor->output->serial.empty() && VERSION >= 2)
+        resource->sendSerialNumber(pMonitor->output->serial.c_str());
 
     if (VERSION >= 4)
         resource->sendAdaptiveSync(pMonitor->vrrActive ? ZWLR_OUTPUT_HEAD_V1_ADAPTIVE_SYNC_STATE_ENABLED : ZWLR_OUTPUT_HEAD_V1_ADAPTIVE_SYNC_STATE_DISABLED);
@@ -146,27 +146,27 @@ void COutputHead::sendAllData() {
     // send all available modes
 
     if (modes.empty()) {
-        if (!wl_list_empty(&pMonitor->output->modes)) {
-            wlr_output_mode* mode;
-
-            wl_list_for_each(mode, &pMonitor->output->modes, link) {
-                makeAndSendNewMode(mode);
+        if (!pMonitor->output->modes.empty()) {
+            for (auto const& m : pMonitor->output->modes) {
+                makeAndSendNewMode(m);
             }
+        } else if (pMonitor->output->state->state().customMode) {
+            makeAndSendNewMode(pMonitor->output->state->state().customMode);
         } else
             makeAndSendNewMode(nullptr);
     }
 
     // send current mode
     if (pMonitor->m_bEnabled) {
-        for (auto& mw : modes) {
+        for (auto const& mw : modes) {
             auto m = mw.lock();
 
             if (!m)
                 continue;
 
-            if (m->mode == pMonitor->currentMode) {
+            if (m->mode == pMonitor->output->state->state().mode) {
                 if (m->mode)
-                    LOGM(LOG, "  | sending current mode for {}: {}x{}@{}", pMonitor->szName, m->mode->width, m->mode->height, m->mode->refresh);
+                    LOGM(LOG, "  | sending current mode for {}: {}x{}@{}", pMonitor->szName, m->mode->pixelSize.x, m->mode->pixelSize.y, m->mode->refreshRate);
                 else
                     LOGM(LOG, "  | sending current mode for {}: null (fake)", pMonitor->szName);
                 resource->sendCurrentMode(m->resource.get());
@@ -189,7 +189,7 @@ void COutputHead::updateMode() {
         resource->sendAdaptiveSync(pMonitor->vrrActive ? ZWLR_OUTPUT_HEAD_V1_ADAPTIVE_SYNC_STATE_ENABLED : ZWLR_OUTPUT_HEAD_V1_ADAPTIVE_SYNC_STATE_DISABLED);
 
     if (pMonitor->m_bEnabled) {
-        for (auto& mw : modes) {
+        for (auto const& mw : modes) {
             auto m = mw.lock();
 
             if (!m)
@@ -197,7 +197,7 @@ void COutputHead::updateMode() {
 
             if (m->mode == pMonitor->currentMode) {
                 if (m->mode)
-                    LOGM(LOG, "  | sending current mode for {}: {}x{}@{}", pMonitor->szName, m->mode->width, m->mode->height, m->mode->refresh);
+                    LOGM(LOG, "  | sending current mode for {}: {}x{}@{}", pMonitor->szName, m->mode->pixelSize.x, m->mode->pixelSize.y, m->mode->refreshRate);
                 else
                     LOGM(LOG, "  | sending current mode for {}: null (fake)", pMonitor->szName);
                 resource->sendCurrentMode(m->resource.get());
@@ -207,7 +207,7 @@ void COutputHead::updateMode() {
     }
 }
 
-void COutputHead::makeAndSendNewMode(wlr_output_mode* mode) {
+void COutputHead::makeAndSendNewMode(SP<Aquamarine::SOutputMode> mode) {
     const auto RESOURCE = PROTO::outputManagement->m_vModes.emplace_back(makeShared<COutputMode>(makeShared<CZwlrOutputModeV1>(resource->client(), resource->version(), 0), mode));
 
     if (!RESOURCE->good()) {
@@ -221,11 +221,11 @@ void COutputHead::makeAndSendNewMode(wlr_output_mode* mode) {
     RESOURCE->sendAllData();
 }
 
-CMonitor* COutputHead::monitor() {
-    return pMonitor;
+PHLMONITOR COutputHead::monitor() {
+    return pMonitor.lock();
 }
 
-COutputMode::COutputMode(SP<CZwlrOutputModeV1> resource_, wlr_output_mode* mode_) : resource(resource_), mode(mode_) {
+COutputMode::COutputMode(SP<CZwlrOutputModeV1> resource_, SP<Aquamarine::SOutputMode> mode_) : resource(resource_), mode(mode_) {
     if (!good())
         return;
 
@@ -237,11 +237,11 @@ void COutputMode::sendAllData() {
     if (!mode)
         return;
 
-    LOGM(LOG, "  | sending mode {}x{}@{}mHz, pref: {}", mode->width, mode->height, mode->refresh, mode->preferred);
+    LOGM(LOG, "  | sending mode {}x{}@{}mHz, pref: {}", mode->pixelSize.x, mode->pixelSize.y, mode->refreshRate, mode->preferred);
 
-    resource->sendSize(mode->width, mode->height);
-    if (mode->refresh > 0)
-        resource->sendRefresh(mode->refresh);
+    resource->sendSize(mode->pixelSize.x, mode->pixelSize.y);
+    if (mode->refreshRate > 0)
+        resource->sendRefresh(mode->refreshRate);
     if (mode->preferred)
         resource->sendPreferred();
 }
@@ -250,8 +250,8 @@ bool COutputMode::good() {
     return resource->resource();
 }
 
-wlr_output_mode* COutputMode::getMode() {
-    return mode;
+SP<Aquamarine::SOutputMode> COutputMode::getMode() {
+    return mode.lock();
 }
 
 COutputConfiguration::COutputConfiguration(SP<CZwlrOutputConfigurationV1> resource_, SP<COutputManager> owner_) : resource(resource_), owner(owner_) {
@@ -307,10 +307,15 @@ COutputConfiguration::COutputConfiguration(SP<CZwlrOutputConfigurationV1> resour
 
         LOGM(LOG, "disableHead on {}", PMONITOR->szName);
 
-        PMONITOR->activeMonitorRule.disabled = true;
-        if (!g_pConfigManager->replaceMonitorRule(PMONITOR->activeMonitorRule))
-            g_pConfigManager->appendMonitorRule(PMONITOR->activeMonitorRule);
-        g_pHyprRenderer->applyMonitorRule(PMONITOR, &PMONITOR->activeMonitorRule, false);
+        SWlrManagerSavedOutputState newState;
+        if (owner->monitorStates.contains(PMONITOR->szName))
+            newState = owner->monitorStates.at(PMONITOR->szName);
+
+        newState.enabled = false;
+
+        g_pConfigManager->m_bWantsMonitorReload = true;
+
+        owner->monitorStates[PMONITOR->szName] = newState;
     });
 
     resource->setTest([this](CZwlrOutputConfigurationV1* r) {
@@ -346,7 +351,12 @@ bool COutputConfiguration::applyTestConfiguration(bool test) {
 
     LOGM(LOG, "Applying configuration");
 
-    for (auto& headw : heads) {
+    if (!owner) {
+        LOGM(ERR, "applyTestConfiguration: no owner?!");
+        return false;
+    }
+
+    for (auto const& headw : heads) {
         auto head = headw.lock();
 
         if (!head)
@@ -357,52 +367,68 @@ bool COutputConfiguration::applyTestConfiguration(bool test) {
         if (!PMONITOR)
             continue;
 
-        LOGM(LOG, "Applying config for monitor {}", PMONITOR->szName);
+        LOGM(LOG, "Saving config for monitor {}", PMONITOR->szName);
 
-        SMonitorRule newRule = PMONITOR->activeMonitorRule;
-        newRule.name         = PMONITOR->szName;
-        newRule.disabled     = false;
+        SWlrManagerSavedOutputState newState;
+        if (owner->monitorStates.contains(PMONITOR->szName))
+            newState = owner->monitorStates.at(PMONITOR->szName);
 
-        if (head->committedProperties & COutputConfigurationHead::eCommittedProperties::OUTPUT_HEAD_COMMITTED_MODE) {
-            newRule.resolution  = {head->state.mode->getMode()->width, head->state.mode->getMode()->height};
-            newRule.refreshRate = head->state.mode->getMode()->refresh / 1000.F;
-        } else if (head->committedProperties & COutputConfigurationHead::eCommittedProperties::OUTPUT_HEAD_COMMITTED_CUSTOM_MODE) {
-            newRule.resolution  = head->state.customMode.size;
-            newRule.refreshRate = head->state.customMode.refresh / 1000.F;
+        newState.enabled = true;
+
+        if (head->state.committedProperties & eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_MODE) {
+            newState.resolution = head->state.mode->getMode()->pixelSize;
+            newState.refresh    = head->state.mode->getMode()->refreshRate;
+            newState.committedProperties |= eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_MODE;
+            LOGM(LOG, " > Mode: {:.0f}x{:.0f}@{}mHz", newState.resolution.x, newState.resolution.y, newState.refresh);
+        } else if (head->state.committedProperties & eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_CUSTOM_MODE) {
+            newState.resolution = head->state.customMode.size;
+            newState.refresh    = head->state.customMode.refresh;
+            newState.committedProperties |= eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_CUSTOM_MODE;
+            LOGM(LOG, " > Custom mode: {:.0f}x{:.0f}@{}mHz", newState.resolution.x, newState.resolution.y, newState.refresh);
         }
 
-        if (head->committedProperties & COutputConfigurationHead::eCommittedProperties::OUTPUT_HEAD_COMMITTED_POSITION)
-            newRule.offset = head->state.position;
+        if (head->state.committedProperties & eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_POSITION) {
+            newState.position = head->state.position;
+            newState.committedProperties |= eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_POSITION;
+            LOGM(LOG, " > Position: {:.0f}, {:.0f}", head->state.position.x, head->state.position.y);
+        }
 
-        if (head->committedProperties & COutputConfigurationHead::eCommittedProperties::OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC)
-            newRule.vrr = head->state.adaptiveSync;
+        if (head->state.committedProperties & eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC) {
+            newState.adaptiveSync = head->state.adaptiveSync;
+            newState.committedProperties |= eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC;
+            LOGM(LOG, " > vrr: {}", newState.adaptiveSync);
+        }
 
-        if (head->committedProperties & COutputConfigurationHead::eCommittedProperties::OUTPUT_HEAD_COMMITTED_SCALE)
-            newRule.scale = head->state.scale;
+        if (head->state.committedProperties & eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_SCALE) {
+            newState.scale = head->state.scale;
+            newState.committedProperties |= eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_SCALE;
+            LOGM(LOG, " > scale: {:.2f}", newState.scale);
+        }
 
-        if (head->committedProperties & COutputConfigurationHead::eCommittedProperties::OUTPUT_HEAD_COMMITTED_TRANSFORM)
-            newRule.transform = head->state.transform;
+        if (head->state.committedProperties & eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_TRANSFORM) {
+            newState.transform = head->state.transform;
+            newState.committedProperties |= eWlrOutputCommittedProperties::OUTPUT_HEAD_COMMITTED_TRANSFORM;
+            LOGM(LOG, " > transform: {}", (uint8_t)newState.transform);
+        }
 
         // reset properties for next set.
-        head->committedProperties = 0;
+        head->state.committedProperties = 0;
 
-        if (!g_pConfigManager->replaceMonitorRule(newRule))
-            g_pConfigManager->appendMonitorRule(newRule);
         g_pConfigManager->m_bWantsMonitorReload = true;
+
+        owner->monitorStates[PMONITOR->szName] = newState;
     }
 
-    LOGM(LOG, "Applied configuration");
+    LOGM(LOG, "Saved configuration");
 
     return true;
 }
 
-COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHeadV1> resource_, CMonitor* pMonitor_) : resource(resource_), pMonitor(pMonitor_) {
+COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHeadV1> resource_, PHLMONITOR pMonitor_) : resource(resource_), pMonitor(pMonitor_) {
     if (!good())
         return;
 
     resource->setOnDestroy([this](CZwlrOutputConfigurationHeadV1* r) { PROTO::outputManagement->destroyResource(this); });
-
-    listeners.monitorDestroy = pMonitor->events.destroy.registerListener([this](std::any d) { pMonitor = nullptr; });
 
     resource->setSetMode([this](CZwlrOutputConfigurationHeadV1* r, wl_resource* outputMode) {
         const auto MODE = PROTO::outputManagement->modeFromResource(outputMode);
@@ -417,15 +443,15 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        if (committedProperties & OUTPUT_HEAD_COMMITTED_MODE) {
+        if (state.committedProperties & OUTPUT_HEAD_COMMITTED_MODE) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_ALREADY_SET, "Property already set");
             return;
         }
 
-        committedProperties |= OUTPUT_HEAD_COMMITTED_MODE;
+        state.committedProperties |= OUTPUT_HEAD_COMMITTED_MODE;
         state.mode = MODE;
 
-        LOGM(LOG, " | configHead for {}: set mode to {}x{}@{}", pMonitor->szName, MODE->getMode()->width, MODE->getMode()->height, MODE->getMode()->refresh);
+        LOGM(LOG, " | configHead for {}: set mode to {}x{}@{}", pMonitor->szName, MODE->getMode()->pixelSize.x, MODE->getMode()->pixelSize.y, MODE->getMode()->refreshRate);
     });
 
     resource->setSetCustomMode([this](CZwlrOutputConfigurationHeadV1* r, int32_t w, int32_t h, int32_t refresh) {
@@ -434,17 +460,22 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        if (committedProperties & OUTPUT_HEAD_COMMITTED_CUSTOM_MODE) {
+        if (state.committedProperties & OUTPUT_HEAD_COMMITTED_CUSTOM_MODE) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_ALREADY_SET, "Property already set");
             return;
         }
 
-        if (w <= 0 || h <= 0 || refresh <= 100) {
+        if (w <= 0 || h <= 0 || refresh < 0) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_INVALID_CUSTOM_MODE, "Invalid mode");
             return;
         }
 
-        committedProperties |= OUTPUT_HEAD_COMMITTED_CUSTOM_MODE;
+        if (refresh == 0) {
+            LOGM(LOG, " | configHead for {}: refreshRate 0, using old refresh rate of {:.2f}Hz", pMonitor->szName, pMonitor->refreshRate);
+            refresh = std::round(pMonitor->refreshRate * 1000.F);
+        }
+
+        state.committedProperties |= OUTPUT_HEAD_COMMITTED_CUSTOM_MODE;
         state.customMode = {{w, h}, (uint32_t)refresh};
 
         LOGM(LOG, " | configHead for {}: set custom mode to {}x{}@{}", pMonitor->szName, w, h, refresh);
@@ -456,12 +487,12 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        if (committedProperties & OUTPUT_HEAD_COMMITTED_POSITION) {
+        if (state.committedProperties & OUTPUT_HEAD_COMMITTED_POSITION) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_ALREADY_SET, "Property already set");
             return;
         }
 
-        committedProperties |= OUTPUT_HEAD_COMMITTED_POSITION;
+        state.committedProperties |= OUTPUT_HEAD_COMMITTED_POSITION;
         state.position = {x, y};
 
         LOGM(LOG, " | configHead for {}: set pos to {}, {}", pMonitor->szName, x, y);
@@ -473,7 +504,7 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        if (committedProperties & OUTPUT_HEAD_COMMITTED_TRANSFORM) {
+        if (state.committedProperties & OUTPUT_HEAD_COMMITTED_TRANSFORM) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_ALREADY_SET, "Property already set");
             return;
         }
@@ -483,7 +514,7 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        committedProperties |= OUTPUT_HEAD_COMMITTED_TRANSFORM;
+        state.committedProperties |= OUTPUT_HEAD_COMMITTED_TRANSFORM;
         state.transform = (wl_output_transform)transform;
 
         LOGM(LOG, " | configHead for {}: set transform to {}", pMonitor->szName, transform);
@@ -495,7 +526,7 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        if (committedProperties & OUTPUT_HEAD_COMMITTED_SCALE) {
+        if (state.committedProperties & OUTPUT_HEAD_COMMITTED_SCALE) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_ALREADY_SET, "Property already set");
             return;
         }
@@ -507,7 +538,7 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        committedProperties |= OUTPUT_HEAD_COMMITTED_SCALE;
+        state.committedProperties |= OUTPUT_HEAD_COMMITTED_SCALE;
         state.scale = scale;
 
         LOGM(LOG, " | configHead for {}: set scale to {:.2f}", pMonitor->szName, scale);
@@ -519,7 +550,7 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        if (committedProperties & OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC) {
+        if (state.committedProperties & OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC) {
             resource->error(ZWLR_OUTPUT_CONFIGURATION_HEAD_V1_ERROR_ALREADY_SET, "Property already set");
             return;
         }
@@ -529,7 +560,7 @@ COutputConfigurationHead::COutputConfigurationHead(SP<CZwlrOutputConfigurationHe
             return;
         }
 
-        committedProperties |= OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC;
+        state.committedProperties |= OUTPUT_HEAD_COMMITTED_ADAPTIVE_SYNC;
         state.adaptiveSync = as;
 
         LOGM(LOG, " | configHead for {}: set adaptiveSync to {}", pMonitor->szName, as);
@@ -577,15 +608,15 @@ void COutputManagementProtocol::destroyResource(COutputConfigurationHead* resour
 }
 
 void COutputManagementProtocol::updateAllOutputs() {
-    for (auto& m : g_pCompositor->m_vRealMonitors) {
-        for (auto& mgr : m_vManagers) {
-            mgr->ensureMonitorSent(m.get());
+    for (auto const& m : g_pCompositor->m_vRealMonitors) {
+        for (auto const& mgr : m_vManagers) {
+            mgr->ensureMonitorSent(m);
         }
     }
 }
 
 SP<COutputHead> COutputManagementProtocol::headFromResource(wl_resource* r) {
-    for (auto& h : m_vHeads) {
+    for (auto const& h : m_vHeads) {
         if (h->resource->resource() == r)
             return h;
     }
@@ -594,9 +625,20 @@ SP<COutputHead> COutputManagementProtocol::headFromResource(wl_resource* r) {
 }
 
 SP<COutputMode> COutputManagementProtocol::modeFromResource(wl_resource* r) {
-    for (auto& h : m_vModes) {
+    for (auto const& h : m_vModes) {
         if (h->resource->resource() == r)
             return h;
+    }
+
+    return nullptr;
+}
+
+SP<SWlrManagerSavedOutputState> COutputManagementProtocol::getOutputStateFor(PHLMONITOR pMonitor) {
+    for (auto const& m : m_vManagers) {
+        if (!m->monitorStates.contains(pMonitor->szName))
+            continue;
+
+        return makeShared<SWlrManagerSavedOutputState>(m->monitorStates.at(pMonitor->szName));
     }
 
     return nullptr;

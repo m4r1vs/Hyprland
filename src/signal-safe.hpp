@@ -1,6 +1,7 @@
 #pragma once
 
 #include "defines.hpp"
+#include <cstring>
 
 template <uint16_t N>
 class MaxLengthCString {
@@ -138,7 +139,7 @@ class BufFileWriter {
             abort();
         } else {
             close(pipefd[1]);
-            int  len;
+            long len;
             char readbuf[256];
             while ((len = read(pipefd[0], readbuf, 256)) > 0) {
                 write(readbuf, len);
@@ -154,7 +155,7 @@ class BufFileWriter {
     void flush() {
         size_t i = 0;
         while (i < m_writeBufPos) {
-            int written = ::write(m_fd, m_writeBuf + i, m_writeBufPos - i);
+            auto written = ::write(m_fd, m_writeBuf + i, m_writeBufPos - i);
             if (written <= 0) {
                 return;
             }

@@ -7,7 +7,7 @@
 #include "WaylandProtocol.hpp"
 #include "text-input-unstable-v3.hpp"
 #include "../helpers/signal/Signal.hpp"
-#include "../helpers/Box.hpp"
+#include "../helpers/math/Math.hpp"
 
 class CWLSurfaceResource;
 
@@ -31,6 +31,7 @@ class CTextInputV3 {
         CSignal onCommit;
         CSignal enable;
         CSignal disable;
+        CSignal reset;
         CSignal destroy;
     } events;
 
@@ -53,7 +54,11 @@ class CTextInputV3 {
             CBox cursorBox;
         } box;
 
-        bool                      enabled = false;
+        struct {
+            bool isEnablePending  = false;
+            bool isDisablePending = false;
+            bool value            = false;
+        } enabled;
 
         zwpTextInputV3ChangeCause cause = ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_INPUT_METHOD;
 

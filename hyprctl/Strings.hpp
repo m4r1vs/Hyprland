@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 const std::string_view USAGE = R"#(usage: hyprctl [flags] <command> [args...|--help]
 
 commands:
@@ -38,7 +40,8 @@ commands:
     plugin ...          → Issue a plugin request
     reload [config-only] → Issue a reload to force reload the config. Pass
                           'config-only' to disable monitor reload
-    rollinglog          → Prints tail of the log
+    rollinglog          → Prints tail of the log. Also supports -f/--follow
+                          option
     setcursor <theme> <size> → Sets the cursor theme and reloads the cursor
                           manager
     seterror <color> <message...> → Sets the hyprctl error string. Color has
@@ -112,7 +115,7 @@ create <backend>:
 remove <name>:
     Removes virtual output. Pass the output's name, as found in
     'hyprctl monitors'
-    
+
 flags:
     See 'hyprctl --help')#";
 

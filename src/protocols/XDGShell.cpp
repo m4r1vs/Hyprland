@@ -1,11 +1,26 @@
 #include "XDGShell.hpp"
+#include "XDGDialog.hpp"
 #include <algorithm>
 #include "../Compositor.hpp"
 #include "../managers/SeatManager.hpp"
 #include "core/Seat.hpp"
 #include "core/Compositor.hpp"
+#include <cstring>
+#include <ranges>
 
-#define LOGM PROTO::xdgShell->protoLog
+void SXDGPositionerState::setAnchor(xdgPositionerAnchor edges) {
+    anchor.setTop(edges == XDG_POSITIONER_ANCHOR_TOP || edges == XDG_POSITIONER_ANCHOR_TOP_LEFT || edges == XDG_POSITIONER_ANCHOR_TOP_RIGHT);
+    anchor.setLeft(edges == XDG_POSITIONER_ANCHOR_LEFT || edges == XDG_POSITIONER_ANCHOR_TOP_LEFT || edges == XDG_POSITIONER_ANCHOR_BOTTOM_LEFT);
+    anchor.setBottom(edges == XDG_POSITIONER_ANCHOR_BOTTOM || edges == XDG_POSITIONER_ANCHOR_BOTTOM_LEFT || edges == XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT);
+    anchor.setRight(edges == XDG_POSITIONER_ANCHOR_RIGHT || edges == XDG_POSITIONER_ANCHOR_TOP_RIGHT || edges == XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT);
+}
+
+void SXDGPositionerState::setGravity(xdgPositionerGravity edges) {
+    gravity.setTop(edges == XDG_POSITIONER_GRAVITY_TOP || edges == XDG_POSITIONER_GRAVITY_TOP_LEFT || edges == XDG_POSITIONER_GRAVITY_TOP_RIGHT);
+    gravity.setLeft(edges == XDG_POSITIONER_GRAVITY_LEFT || edges == XDG_POSITIONER_GRAVITY_TOP_LEFT || edges == XDG_POSITIONER_GRAVITY_BOTTOM_LEFT);
+    gravity.setBottom(edges == XDG_POSITIONER_GRAVITY_BOTTOM || edges == XDG_POSITIONER_GRAVITY_BOTTOM_LEFT || edges == XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+    gravity.setRight(edges == XDG_POSITIONER_GRAVITY_RIGHT || edges == XDG_POSITIONER_GRAVITY_TOP_RIGHT || edges == XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+}
 
 CXDGPopupResource::CXDGPopupResource(SP<CXdgPopup> resource_, SP<CXDGSurfaceResource> owner_, SP<CXDGSurfaceResource> surface_, SP<CXDGPositionerResource> positioner) :
     surface(surface_), parent(owner_), resource(resource_), positionerRules(positioner) {
@@ -136,10 +151,12 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
         wl_array_release(&arr);
     }
 
-    pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_LEFT);
-    pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_RIGHT);
-    pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_TOP);
-    pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_BOTTOM);
+    if (resource->version() >= 2) {
+        pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_LEFT);
+        pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_RIGHT);
+        pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_TOP);
+        pendingApply.states.push_back(XDG_TOPLEVEL_STATE_TILED_BOTTOM);
+    }
 
     resource->setSetTitle([this](CXdgToplevel* r, const char* t) {
         state.title = t;
@@ -192,15 +209,25 @@ CXDGToplevelResource::CXDGToplevelResource(SP<CXdgToplevel> resource_, SP<CXDGSu
     });
 
     resource->setSetParent([this](CXdgToplevel* r, wl_resource* parentR) {
+        auto oldParent = parent;
+
+        if (parent)
+            std::erase(parent->children, self);
+
         auto newp = parentR ? CXDGToplevelResource::fromResource(parentR) : nullptr;
         parent    = newp;
 
-        LOGM(LOG, "Toplevel {:x} sets parent to {:x}", (uintptr_t)this, (uintptr_t)newp.get());
+        if (parent)
+            parent->children.emplace_back(self);
+
+        LOGM(LOG, "Toplevel {:x} sets parent to {:x}{}", (uintptr_t)this, (uintptr_t)newp.get(), (oldParent ? std::format(" (was {:x})", (uintptr_t)oldParent.get()) : ""));
     });
 }
 
 CXDGToplevelResource::~CXDGToplevelResource() {
     events.destroy.emit();
+    if (parent)
+        std::erase_if(parent->children, [this](const auto& other) { return !other || other.get() == this; });
 }
 
 SP<CXDGToplevelResource> CXDGToplevelResource::fromResource(wl_resource* res) {
@@ -210,6 +237,10 @@ SP<CXDGToplevelResource> CXDGToplevelResource::fromResource(wl_resource* res) {
 
 bool CXDGToplevelResource::good() {
     return resource->resource();
+}
+
+bool CXDGToplevelResource::anyChildModal() {
+    return std::ranges::any_of(children, [](const auto& child) { return child && child->dialog && child->dialog->modal; });
 }
 
 uint32_t CXDGToplevelResource::setSize(const Vector2D& size) {
@@ -261,6 +292,9 @@ uint32_t CXDGToplevelResource::setActive(bool active) {
 }
 
 uint32_t CXDGToplevelResource::setSuspeneded(bool sus) {
+    if (resource->version() < 6)
+        return owner->scheduleConfigure(); // SUSPENDED is since 6
+
     bool set = std::find(pendingApply.states.begin(), pendingApply.states.end(), XDG_TOPLEVEL_STATE_SUSPENDED) != pendingApply.states.end();
 
     if (sus == set)
@@ -327,12 +361,12 @@ CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBas
         if (toplevel)
             toplevel->current = toplevel->pending;
 
-        if (initialCommit && surface->pending.buffer) {
+        if (initialCommit && surface->pending.texture) {
             resource->error(-1, "Buffer attached before initial commit");
             return;
         }
 
-        if (surface->current.buffer && !mapped) {
+        if (surface->current.texture && !mapped) {
             // this forces apps to not draw CSD.
             if (toplevel)
                 toplevel->setMaximized(true);
@@ -343,10 +377,10 @@ CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBas
             return;
         }
 
-        if (!surface->current.buffer && mapped) {
+        if (!surface->current.texture && mapped) {
             mapped = false;
-            surface->unmap();
             events.unmap.emit();
+            surface->unmap();
             return;
         }
 
@@ -370,7 +404,7 @@ CXDGSurfaceResource::CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBas
 
         g_pCompositor->m_vWindows.emplace_back(CWindow::create(self.lock()));
 
-        for (auto& p : popups) {
+        for (auto const& p : popups) {
             if (!p)
                 continue;
             events.newPopup.emit(p);
@@ -421,10 +455,6 @@ CXDGSurfaceResource::~CXDGSurfaceResource() {
         wl_event_source_remove(configureSource);
     if (surface)
         surface->resetRole();
-}
-
-eSurfaceRole CXDGSurfaceResource::role() {
-    return SURFACE_ROLE_XDG_SHELL;
 }
 
 bool CXDGSurfaceResource::good() {
@@ -484,9 +514,9 @@ CXDGPositionerResource::CXDGPositionerResource(SP<CXdgPositioner> resource_, SP<
 
     resource->setSetOffset([this](CXdgPositioner* r, int32_t x, int32_t y) { state.offset = {x, y}; });
 
-    resource->setSetAnchor([this](CXdgPositioner* r, xdgPositionerAnchor a) { state.anchor = a; });
+    resource->setSetAnchor([this](CXdgPositioner* r, xdgPositionerAnchor a) { state.setAnchor(a); });
 
-    resource->setSetGravity([this](CXdgPositioner* r, xdgPositionerGravity g) { state.gravity = g; });
+    resource->setSetGravity([this](CXdgPositioner* r, xdgPositionerGravity g) { state.setGravity(g); });
 
     resource->setSetConstraintAdjustment([this](CXdgPositioner* r, xdgPositionerConstraintAdjustment a) { state.constraintAdjustment = (uint32_t)a; });
 
@@ -507,122 +537,127 @@ CXDGPositionerRules::CXDGPositionerRules(SP<CXDGPositionerResource> positioner) 
     state = positioner->state;
 }
 
-static Vector2D pointForAnchor(const CBox& box, xdgPositionerAnchor anchor) {
-    switch (anchor) {
-        case XDG_POSITIONER_ANCHOR_TOP: return box.pos() + Vector2D{box.size().x / 2.F, 0};
-        case XDG_POSITIONER_ANCHOR_BOTTOM: return box.pos() + Vector2D{box.size().x / 2.F, box.size().y};
-        case XDG_POSITIONER_ANCHOR_LEFT: return box.pos() + Vector2D{0, box.size().y / 2.F};
-        case XDG_POSITIONER_ANCHOR_RIGHT: return box.pos() + Vector2D{box.size().x, box.size().y / 2.F};
-        case XDG_POSITIONER_ANCHOR_TOP_LEFT: return box.pos();
-        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT: return box.pos() + Vector2D{0, box.size().y};
-        case XDG_POSITIONER_ANCHOR_TOP_RIGHT: return box.pos() + Vector2D{box.size().x, 0};
-        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT: return box.pos() + Vector2D{box.size().x, box.size().y};
-        default: return box.pos();
-    }
-
-    return {};
-}
-
-CBox CXDGPositionerRules::getPosition(const CBox& constraint, const Vector2D& parentCoord) {
-
+CBox CXDGPositionerRules::getPosition(CBox constraint, const Vector2D& parentCoord) {
     Debug::log(LOG, "GetPosition with constraint {} {} and parent {}", constraint.pos(), constraint.size(), parentCoord);
 
-    CBox predictedBox = {parentCoord + constraint.pos() + pointForAnchor(state.anchorRect, state.anchor) + state.offset, state.requestedSize};
+    // padding
+    constraint.expand(-4);
 
-    bool success = predictedBox.inside(constraint);
+    auto anchorRect = state.anchorRect.copy().translate(parentCoord);
 
-    if (success)
-        return predictedBox.translate(-parentCoord - constraint.pos());
+    auto width   = state.requestedSize.x;
+    auto height  = state.requestedSize.y;
+    auto gravity = state.gravity;
 
-    if (state.constraintAdjustment & (XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y)) {
-        // attempt to flip
-        const bool flipX = state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X;
-        const bool flipY = state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y;
+    auto anchorX = state.anchor.left() ? anchorRect.x : state.anchor.right() ? anchorRect.extent().x : anchorRect.middle().x;
+    auto anchorY = state.anchor.top() ? anchorRect.y : state.anchor.bottom() ? anchorRect.extent().y : anchorRect.middle().y;
 
-        CBox       test = predictedBox;
-        success         = true;
-        if (flipX && test.copy().translate(Vector2D{-predictedBox.w - state.anchorRect.w, 0}).expand(-1).inside(constraint))
-            test.translate(Vector2D{-predictedBox.w - state.anchorRect.w, 0});
-        else if (flipY && test.copy().translate(Vector2D{0, -predictedBox.h - state.anchorRect.h}).expand(-1).inside(constraint))
-            test.translate(Vector2D{0, -predictedBox.h - state.anchorRect.h});
-        else if (flipX && flipY && test.copy().translate(Vector2D{-predictedBox.w - state.anchorRect.w, -predictedBox.h - state.anchorRect.h}).expand(-1).inside(constraint))
-            test.translate(Vector2D{-predictedBox.w - state.anchorRect.w, -predictedBox.h - state.anchorRect.h});
-        else
-            success = false;
+    auto calcEffectiveX = [&](CEdges anchorGravity, double anchorX) { return anchorGravity.left() ? anchorX - width : anchorGravity.right() ? anchorX : anchorX - width / 2; };
+    auto calcEffectiveY = [&](CEdges anchorGravity, double anchorY) { return anchorGravity.top() ? anchorY - height : anchorGravity.bottom() ? anchorY : anchorY - height / 2; };
 
-        if (success)
-            return test.translate(-parentCoord - constraint.pos());
-    }
-
-    // if flips fail, we will slide and remember.
-    // if the positioner is allowed to resize, then resize the slid thing.
-    CBox test = predictedBox;
-
-    // for slide and resize, defines the padding around the edge for the positioned
-    // surface.
-    constexpr int EDGE_PADDING = 4;
-
-    if (state.constraintAdjustment & (XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y)) {
-        // attempt to slide
-        const bool slideX = state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X;
-        const bool slideY = state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y;
-
-        //const bool gravityLeft = state.gravity == XDG_POSITIONER_GRAVITY_NONE || state.gravity == XDG_POSITIONER_GRAVITY_LEFT || state.gravity == XDG_POSITIONER_GRAVITY_TOP_LEFT || state.gravity == XDG_POSITIONER_GRAVITY_BOTTOM_LEFT;
-        //const bool gravityTop = state.gravity == XDG_POSITIONER_GRAVITY_NONE || state.gravity == XDG_POSITIONER_GRAVITY_TOP || state.gravity == XDG_POSITIONER_GRAVITY_TOP_LEFT || state.gravity == XDG_POSITIONER_GRAVITY_TOP_RIGHT;
-
-        const bool leftEdgeOut   = predictedBox.x < constraint.x;
-        const bool topEdgeOut    = predictedBox.y < constraint.y;
-        const bool rightEdgeOut  = predictedBox.x + predictedBox.w > constraint.x + constraint.w;
-        const bool bottomEdgeOut = predictedBox.y + predictedBox.h > constraint.y + constraint.h;
-
-        // TODO: this isn't truly conformant.
-        if (leftEdgeOut && slideX)
-            test.x = constraint.x + EDGE_PADDING;
-        if (rightEdgeOut && slideX)
-            test.x = std::clamp((double)(constraint.x + constraint.w - test.w), (double)(constraint.x + EDGE_PADDING), (double)INFINITY);
-        if (topEdgeOut && slideY)
-            test.y = constraint.y + EDGE_PADDING;
-        if (bottomEdgeOut && slideY)
-            test.y = std::clamp((double)(constraint.y + constraint.h - test.h), (double)(constraint.y + EDGE_PADDING), (double)INFINITY);
-
-        success = test.copy().expand(-1).inside(constraint);
-
-        if (success)
-            return test.translate(-parentCoord - constraint.pos());
-    }
-
-    if (state.constraintAdjustment & (XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y)) {
-        const bool resizeX = state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X;
-        const bool resizeY = state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y;
-
-        const bool leftEdgeOut   = predictedBox.x < constraint.x;
-        const bool topEdgeOut    = predictedBox.y < constraint.y;
-        const bool rightEdgeOut  = predictedBox.x + predictedBox.w > constraint.x + constraint.w;
-        const bool bottomEdgeOut = predictedBox.y + predictedBox.h > constraint.y + constraint.h;
-
-        // TODO: this isn't truly conformant.
-        if (leftEdgeOut && resizeX) {
-            test.w = test.x + test.w - constraint.x - EDGE_PADDING;
-            test.x = constraint.x + EDGE_PADDING;
+    auto calcRemainingWidth = [&](double effectiveX) {
+        auto width = state.requestedSize.x;
+        if (effectiveX < constraint.x) {
+            auto diff  = constraint.x - effectiveX;
+            effectiveX = constraint.x;
+            width -= diff;
         }
-        if (rightEdgeOut && resizeX)
-            test.w = constraint.w - (test.x - constraint.w) - EDGE_PADDING;
-        if (topEdgeOut && resizeY) {
-            test.h = test.y + test.h - constraint.y - EDGE_PADDING;
-            test.y = constraint.y + EDGE_PADDING;
+
+        auto effectiveX2 = effectiveX + width;
+        if (effectiveX2 > constraint.extent().x)
+            width -= effectiveX2 - constraint.extent().x;
+
+        return std::make_pair(effectiveX, width);
+    };
+
+    auto calcRemainingHeight = [&](double effectiveY) {
+        auto height = state.requestedSize.y;
+        if (effectiveY < constraint.y) {
+            auto diff  = constraint.y - effectiveY;
+            effectiveY = constraint.y;
+            height -= diff;
         }
-        if (bottomEdgeOut && resizeY)
-            test.h = constraint.h - (test.y - constraint.y) - EDGE_PADDING;
 
-        success = test.copy().expand(-1).inside(constraint);
+        auto effectiveY2 = effectiveY + height;
+        if (effectiveY2 > constraint.extent().y)
+            height -= effectiveY2 - constraint.extent().y;
 
-        if (success)
-            return test.translate(-parentCoord - constraint.pos());
+        return std::make_pair(effectiveY, height);
+    };
+
+    auto effectiveX = calcEffectiveX(gravity, anchorX);
+    auto effectiveY = calcEffectiveY(gravity, anchorY);
+
+    // Note: the usage of offset is a guess which maintains compatibility with other compositors that were tested.
+    // It considers the offset when deciding whether or not to flip but does not actually flip the offset, instead
+    // applying it after the flip step.
+
+    if (state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X) {
+        auto flip = (gravity.left() && effectiveX + state.offset.x < constraint.x) || (gravity.right() && effectiveX + state.offset.x + width > constraint.extent().x);
+
+        if (flip) {
+            auto newGravity    = gravity ^ (CEdges::LEFT | CEdges::RIGHT);
+            auto newAnchorX    = state.anchor.left() ? anchorRect.extent().x : state.anchor.right() ? anchorRect.x : anchorX;
+            auto newEffectiveX = calcEffectiveX(newGravity, newAnchorX);
+
+            if (calcRemainingWidth(newEffectiveX).second > calcRemainingWidth(effectiveX).second) {
+                gravity    = newGravity;
+                anchorX    = newAnchorX;
+                effectiveX = newEffectiveX;
+            }
+        }
     }
 
-    LOGM(WARN, "Compositor/client bug: xdg_positioner couldn't find a place");
+    if (state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y) {
+        auto flip = (state.gravity.top() && effectiveY + state.offset.y < constraint.y) || (state.gravity.bottom() && effectiveY + state.offset.y + height > constraint.extent().y);
 
-    return test.translate(-parentCoord - constraint.pos());
+        if (flip) {
+            auto newGravity    = gravity ^ (CEdges::TOP | CEdges::BOTTOM);
+            auto newAnchorY    = state.anchor.top() ? anchorRect.extent().y : state.anchor.bottom() ? anchorRect.y : anchorY;
+            auto newEffectiveY = calcEffectiveY(newGravity, newAnchorY);
+
+            if (calcRemainingHeight(newEffectiveY).second > calcRemainingHeight(effectiveY).second) {
+                gravity    = newGravity;
+                anchorY    = newAnchorY;
+                effectiveY = newEffectiveY;
+            }
+        }
+    }
+
+    effectiveX += state.offset.x;
+    effectiveY += state.offset.y;
+
+    // Slide order is important for the case where the window is too large to fit on screen.
+
+    if (state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X) {
+        if (effectiveX + width > constraint.extent().x)
+            effectiveX = constraint.extent().x - width;
+
+        if (effectiveX < constraint.x)
+            effectiveX = constraint.x;
+    }
+
+    if (state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y) {
+        if (effectiveY + height > constraint.extent().y)
+            effectiveY = constraint.extent().y - height;
+
+        if (effectiveY < constraint.y)
+            effectiveY = constraint.y;
+    }
+
+    if (state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X) {
+        auto [newX, newWidth] = calcRemainingWidth(effectiveX);
+        effectiveX            = newX;
+        width                 = newWidth;
+    }
+
+    if (state.constraintAdjustment & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y) {
+        auto [newY, newHeight] = calcRemainingHeight(effectiveY);
+        effectiveY             = newY;
+        height                 = newHeight;
+    }
+
+    return {effectiveX - parentCoord.x, effectiveY - parentCoord.y, width, height};
 }
 
 CXDGWMBase::CXDGWMBase(SP<CXdgWmBase> resource_) : resource(resource_) {
@@ -672,8 +707,9 @@ CXDGWMBase::CXDGWMBase(SP<CXdgWmBase> resource_) : resource(resource_) {
             return;
         }
 
-        RESOURCE->self = RESOURCE;
-        SURF->role     = RESOURCE;
+        RESOURCE->self    = RESOURCE;
+        RESOURCE->surface = SURF;
+        SURF->role        = makeShared<CXDGSurfaceRole>(RESOURCE);
 
         surfaces.emplace_back(RESOURCE);
 
@@ -694,7 +730,7 @@ CXDGShellProtocol::CXDGShellProtocol(const wl_interface* iface, const int& ver, 
     grab->keyboard = true;
     grab->pointer  = true;
     grab->setCallback([this]() {
-        for (auto& g : grabbed) {
+        for (auto const& g : grabbed) {
             g->done();
         }
         grabbed.clear();
@@ -759,7 +795,7 @@ void CXDGShellProtocol::addOrStartGrab(SP<CXDGPopupResource> popup) {
 void CXDGShellProtocol::onPopupDestroy(WP<CXDGPopupResource> popup) {
     if (popup == grabOwner) {
         g_pSeatManager->setGrab(nullptr);
-        for (auto& g : grabbed) {
+        for (auto const& g : grabbed) {
             g->done();
         }
         grabbed.clear();
@@ -769,4 +805,8 @@ void CXDGShellProtocol::onPopupDestroy(WP<CXDGPopupResource> popup) {
     std::erase(grabbed, popup);
     if (popup->surface)
         grab->remove(popup->surface->surface.lock());
+}
+
+CXDGSurfaceRole::CXDGSurfaceRole(SP<CXDGSurfaceResource> xdg) : xdgSurface(xdg) {
+    ;
 }

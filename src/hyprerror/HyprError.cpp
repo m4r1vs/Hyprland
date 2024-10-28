@@ -3,6 +3,9 @@
 #include "../Compositor.hpp"
 #include "../config/ConfigValue.hpp"
 
+#include <hyprutils/utils/ScopeGuard.hpp>
+using namespace Hyprutils::Utils;
+
 CHyprError::CHyprError() {
     m_fFadeOpacity.create(AVARTYPE_FLOAT, g_pConfigManager->getAnimationPropertyConfig("fadeIn"), AVARDAMAGE_NONE);
     m_fFadeOpacity.registerVar();
@@ -11,7 +14,7 @@ CHyprError::CHyprError() {
         if (!m_bIsCreated)
             return;
 
-        g_pHyprRenderer->damageMonitor(g_pCompositor->m_pLastMonitor.get());
+        g_pHyprRenderer->damageMonitor(g_pCompositor->m_pLastMonitor.lock());
         m_bMonitorChanged = true;
     });
 
@@ -44,7 +47,7 @@ void CHyprError::createQueued() {
     m_fFadeOpacity.setValueAndWarp(0.f);
     m_fFadeOpacity = 1.f;
 
-    const auto PMONITOR = g_pCompositor->m_vMonitors.front().get();
+    const auto PMONITOR = g_pCompositor->m_vMonitors.front();
 
     const auto SCALE = PMONITOR->scale;
 
@@ -88,14 +91,14 @@ void CHyprError::createQueued() {
     cairo_arc(CAIRO, X + RADIUS, Y + RADIUS, RADIUS, 180 * DEGREES, 270 * DEGREES);
     cairo_close_path(CAIRO);
 
-    cairo_set_source_rgba(CAIRO, m_cQueued.r, m_cQueued.g, m_cQueued.b, m_cQueued.a);
+    cairo_set_source_rgba(CAIRO, 0.06, 0.06, 0.06, 1.0);
     cairo_fill_preserve(CAIRO);
-    cairo_set_source_rgba(CAIRO, 0, 0, 0, 1);
+    cairo_set_source_rgba(CAIRO, m_cQueued.r, m_cQueued.g, m_cQueued.b, m_cQueued.a);
     cairo_set_line_width(CAIRO, 2);
     cairo_stroke(CAIRO);
 
     // draw the text with a common font
-    const CColor textColor = m_cQueued.r + m_cQueued.g + m_cQueued.b < 0.2f ? CColor(1.0, 1.0, 1.0, 1.0) : CColor(0, 0, 0, 1.0);
+    const CColor textColor = CColor(0.9, 0.9, 0.9, 1.0);
     cairo_set_source_rgba(CAIRO, textColor.r, textColor.g, textColor.b, textColor.a);
 
     static auto           fontFamily = CConfigValue<std::string>("misc:font_family");
@@ -130,6 +133,8 @@ void CHyprError::createQueued() {
     }
     m_szQueued = "";
 
+    m_fLastHeight = yoffset + PAD + 1 - (TOPBAR ? 0 : Y - PAD);
+
     pango_font_description_free(pangoFD);
     g_object_unref(layoutText);
 
@@ -158,6 +163,8 @@ void CHyprError::createQueued() {
     m_cQueued    = CColor();
 
     g_pHyprRenderer->damageMonitor(PMONITOR);
+
+    g_pHyprRenderer->arrangeLayersForMonitor(PMONITOR->ID);
 }
 
 void CHyprError::draw() {
@@ -174,6 +181,11 @@ void CHyprError::draw() {
                 m_pTexture->destroyTexture();
                 m_bIsCreated = false;
                 m_szQueued   = "";
+
+                for (auto& m : g_pCompositor->m_vMonitors) {
+                    g_pHyprRenderer->arrangeLayersForMonitor(m->ID);
+                }
+
                 return;
             } else {
                 m_fFadeOpacity.setConfig(g_pConfigManager->getAnimationPropertyConfig("fadeOut"));
@@ -202,4 +214,12 @@ void CHyprError::destroy() {
         m_bQueuedDestroy = true;
     else
         m_szQueued = "";
+}
+
+bool CHyprError::active() {
+    return m_bIsCreated;
+}
+
+float CHyprError::height() {
+    return m_fLastHeight;
 }

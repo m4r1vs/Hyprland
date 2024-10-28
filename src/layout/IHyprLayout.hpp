@@ -18,11 +18,19 @@ struct SLayoutMessageHeader {
 enum eFullscreenMode : int8_t;
 
 enum eRectCorner {
-    CORNER_NONE = 0,
-    CORNER_TOPLEFT,
-    CORNER_TOPRIGHT,
-    CORNER_BOTTOMRIGHT,
-    CORNER_BOTTOMLEFT
+    CORNER_NONE        = 0,
+    CORNER_TOPLEFT     = (1 << 0),
+    CORNER_TOPRIGHT    = (1 << 1),
+    CORNER_BOTTOMRIGHT = (1 << 2),
+    CORNER_BOTTOMLEFT  = (1 << 3),
+};
+
+enum eSnapEdge {
+    SNAP_INVALID = 0,
+    SNAP_UP      = (1 << 0),
+    SNAP_DOWN    = (1 << 1),
+    SNAP_LEFT    = (1 << 2),
+    SNAP_RIGHT   = (1 << 3),
 };
 
 enum eDirection {
@@ -47,6 +55,7 @@ class IHyprLayout {
     virtual void onWindowCreated(PHLWINDOW, eDirection direction = DIRECTION_DEFAULT);
     virtual void onWindowCreatedTiling(PHLWINDOW, eDirection direction = DIRECTION_DEFAULT) = 0;
     virtual void onWindowCreatedFloating(PHLWINDOW);
+    virtual bool onWindowCreatedAutoGroup(PHLWINDOW);
 
     /*
         Return tiled status
@@ -63,7 +72,7 @@ class IHyprLayout {
         Called when the monitor requires a layout recalculation
         this usually means reserved area changes
     */
-    virtual void recalculateMonitor(const int&) = 0;
+    virtual void recalculateMonitor(const MONITORID&) = 0;
 
     /*
         Called when the compositor requests a window
@@ -110,7 +119,7 @@ class IHyprLayout {
         The layout sets all the fullscreen flags.
         It can either accept or ignore.
     */
-    virtual void fullscreenRequestForWindow(PHLWINDOW, eFullscreenMode, bool) = 0;
+    virtual void fullscreenRequestForWindow(PHLWINDOW pWindow, const eFullscreenMode CURRENT_EFFECTIVE_MODE, const eFullscreenMode EFFECTIVE_MODE) = 0;
 
     /*
         Called when a dispatcher requests a custom message

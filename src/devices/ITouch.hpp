@@ -1,18 +1,17 @@
 #pragma once
 
 #include "IHID.hpp"
-#include "../helpers/WLListener.hpp"
 #include "../macros.hpp"
-#include "../helpers/Vector2D.hpp"
+#include "../helpers/math/Math.hpp"
 
-struct wlr_touch;
+AQUAMARINE_FORWARD(ITouch);
 
 class ITouch : public IHID {
   public:
-    virtual uint32_t   getCapabilities();
-    virtual eHIDType   getType();
-    virtual bool       isVirtual() = 0;
-    virtual wlr_touch* wlr()       = 0;
+    virtual uint32_t               getCapabilities();
+    virtual eHIDType               getType();
+    virtual bool                   isVirtual() = 0;
+    virtual SP<Aquamarine::ITouch> aq()        = 0;
 
     struct SDownEvent {
         uint32_t   timeMs  = 0;

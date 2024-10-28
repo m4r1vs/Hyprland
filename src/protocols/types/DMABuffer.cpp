@@ -3,7 +3,7 @@
 #include "../../render/Renderer.hpp"
 #include "../../helpers/Format.hpp"
 
-CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, SDMABUFAttrs attrs_) : attrs(attrs_) {
+CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, Aquamarine::SDMABUFAttrs const& attrs_) : attrs(attrs_) {
     g_pHyprRenderer->makeEGLCurrent();
 
     listeners.resourceDestroy = events.destroy.registerListener([this](std::any d) {
@@ -16,8 +16,15 @@ CDMABuffer::CDMABuffer(uint32_t id, wl_client* client, SDMABUFAttrs attrs_) : at
 
     auto eglImage = g_pHyprOpenGL->createEGLImage(attrs);
 
-    if (!eglImage)
-        return;
+    if (!eglImage) {
+        Debug::log(ERR, "CDMABuffer: failed to import EGLImage, retrying as implicit");
+        attrs.modifier = DRM_FORMAT_MOD_INVALID;
+        eglImage       = g_pHyprOpenGL->createEGLImage(attrs);
+        if (!eglImage) {
+            Debug::log(ERR, "CDMABuffer: failed to import EGLImage");
+            return;
+        }
+    }
 
     texture = makeShared<CTexture>(attrs, eglImage); // texture takes ownership of the eglImage
     opaque  = FormatUtils::isFormatOpaque(attrs.format);
@@ -31,12 +38,12 @@ CDMABuffer::~CDMABuffer() {
     closeFDs();
 }
 
-eBufferCapability CDMABuffer::caps() {
-    return BUFFER_CAPABILITY_DATAPTR;
+Aquamarine::eBufferCapability CDMABuffer::caps() {
+    return Aquamarine::eBufferCapability::BUFFER_CAPABILITY_DATAPTR;
 }
 
-eBufferType CDMABuffer::type() {
-    return BUFFER_TYPE_DMABUF;
+Aquamarine::eBufferType CDMABuffer::type() {
+    return Aquamarine::eBufferType::BUFFER_TYPE_DMABUF;
 }
 
 void CDMABuffer::update(const CRegion& damage) {
@@ -47,7 +54,7 @@ bool CDMABuffer::isSynchronous() {
     return false;
 }
 
-SDMABUFAttrs CDMABuffer::dmabuf() {
+Aquamarine::SDMABUFAttrs CDMABuffer::dmabuf() {
     return attrs;
 }
 

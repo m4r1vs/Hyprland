@@ -1,33 +1,28 @@
 PREFIX = /usr/local
 
 legacyrenderer:
-	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -DLEGACY_RENDERER:BOOL=true -S . -B ./build -G Ninja
-	cmake --build ./build --config Release --target all
-	chmod -R 777 ./build
+	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -DLEGACY_RENDERER:BOOL=true -S . -B ./build
+	cmake --build ./build --config Release --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
 
 legacyrendererdebug:
-	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Debug -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -DLEGACY_RENDERER:BOOL=true -S . -B ./build -G Ninja
-	cmake --build ./build --config Release --target all
-	chmod -R 777 ./build
+	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Debug -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -DLEGACY_RENDERER:BOOL=true -S . -B ./build
+	cmake --build ./build --config Debug --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
 
 release:
-	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -S . -B ./build -G Ninja
-	cmake --build ./build --config Release --target all
-	chmod -R 777 ./build
+	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -S . -B ./build
+	cmake --build ./build --config Release --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
 
 debug:
-	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Debug -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -S . -B ./build -G Ninja
-	cmake --build ./build --config Debug --target all
-	chmod -R 777 ./build
+	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Debug -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -S . -B ./build
+	cmake --build ./build --config Debug --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
 
 nopch:
-	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -S . -B ./build -G Ninja
-	cmake --build ./build --config Release --target all
+	cmake --no-warn-unused-cli -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_INSTALL_PREFIX:STRING=${PREFIX} -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -S . -B ./build
+	cmake --build ./build --config Release --target all -j`nproc 2>/dev/null || getconf NPROCESSORS_CONF`
 
 clear:
 	rm -rf build
 	rm -f ./protocols/*.h ./protocols/*.c ./protocols/*.cpp ./protocols/*.hpp
-	rm -rf ./subprojects/wlroots-hyprland/build
 
 all:
 	$(MAKE) clear
@@ -42,7 +37,7 @@ uninstall:
 pluginenv:
 	@echo -en "$(MAKE) pluginenv has been deprecated.\nPlease run $(MAKE) all && sudo $(MAKE) installheaders\n"
 	@exit 1
-	
+
 installheaders:
 	@if [ ! -f ./src/version.h ]; then echo -en "You need to run $(MAKE) all first.\n" && exit 1; fi
 
@@ -50,14 +45,11 @@ installheaders:
 	rm -fr ${PREFIX}/include/hyprland
 	mkdir -p ${PREFIX}/include/hyprland
 	mkdir -p ${PREFIX}/include/hyprland/protocols
-	mkdir -p ${PREFIX}/include/hyprland/wlr
 	mkdir -p ${PREFIX}/share/pkgconfig
 
 	cmake --build ./build --config Release --target generate-protocol-headers
 
 	find src -name '*.h*' -print0 | cpio --quiet -0dump ${PREFIX}/include/hyprland
-	cd subprojects/wlroots-hyprland/include/wlr && find . -name '*.h*' -print0 | cpio --quiet -0dump ${PREFIX}/include/hyprland/wlr && cd ../../../..
-	cd subprojects/wlroots-hyprland/build/include && find . -name '*.h*' -print0 | cpio --quiet -0dump ${PREFIX}/include/hyprland/wlr && cd ../../../..
 	cp ./protocols/*.h* ${PREFIX}/include/hyprland/protocols
 	cp ./build/hyprland.pc ${PREFIX}/share/pkgconfig
 	if [ -d /usr/share/pkgconfig ]; then cp ./build/hyprland.pc /usr/share/pkgconfig 2>/dev/null || true; fi
@@ -88,11 +80,11 @@ asan:
 	@pidof Hyprland > /dev/null && exit 1 || echo ""
 
 	rm -rf ./wayland
-	git reset --hard
+	#git reset --hard
 
 	@echo -en "If you want to apply a patch, input its path (leave empty for none):\n"
-	@read patchvar
-	@if [-n "$patchvar"]; then patch -p1 < $patchvar || echo ""; else echo "No patch specified"; fi
+	@read patchvar; \
+	 if [ -n "$$patchvar" ]; then patch -p1 < "$$patchvar" || echo ""; else echo "No patch specified"; fi
 
 	git clone --recursive https://gitlab.freedesktop.org/wayland/wayland
 	cd wayland && patch -p1 < ../scripts/waylandStatic.diff && meson setup build --buildtype=debug -Db_sanitize=address -Ddocumentation=false && ninja -C build && cd ..

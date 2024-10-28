@@ -2,6 +2,7 @@
 #include "../Compositor.hpp"
 #include "../debug/HyprCtl.hpp"
 #include <dlfcn.h>
+#include <filesystem>
 
 #if defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__)
 #include <sys/sysctl.h>
@@ -123,8 +124,8 @@ APICALL bool HyprlandAPI::removeWindowDecoration(HANDLE handle, IHyprWindowDecor
     if (!PLUGIN)
         return false;
 
-    for (auto& w : g_pCompositor->m_vWindows) {
-        for (auto& d : w->m_dWindowDecorations) {
+    for (auto const& w : g_pCompositor->m_vWindows) {
+        for (auto const& d : w->m_dWindowDecorations) {
             if (d.get() == pDecoration) {
                 w->removeWindowDeco(pDecoration);
                 return true;
@@ -193,7 +194,10 @@ APICALL bool HyprlandAPI::addDispatcher(HANDLE handle, const std::string& name, 
 
     PLUGIN->registeredDispatchers.push_back(name);
 
-    g_pKeybindManager->m_mDispatchers[name] = handler;
+    g_pKeybindManager->m_mDispatchers[name] = [handler](std::string arg1) -> SDispatchResult {
+        handler(arg1);
+        return {};
+    };
 
     return true;
 }

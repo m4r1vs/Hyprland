@@ -6,13 +6,14 @@
 #include "OpenGL.hpp"
 #include "Renderbuffer.hpp"
 #include "../helpers/Timer.hpp"
-#include "../helpers/Region.hpp"
+#include "../helpers/math/Math.hpp"
 
 struct SMonitorRule;
 class CWorkspace;
 class CWindow;
 class CInputPopup;
-class IWLBuffer;
+class IHLBuffer;
+class CEventLoopTimer;
 
 // TODO: add fuller damage tracking for updating only parts of a window
 enum DAMAGETRACKINGMODES {
@@ -39,65 +40,72 @@ class CToplevelExportProtocolManager;
 class CInputManager;
 struct SSessionLockSurface;
 
+struct SExplicitSyncSettings {
+    bool explicitEnabled = false, explicitKMSEnabled = false;
+};
+
 class CHyprRenderer {
   public:
     CHyprRenderer();
     ~CHyprRenderer();
 
-    void                            renderMonitor(CMonitor* pMonitor);
-    void                            arrangeLayersForMonitor(const int&);
-    void                            damageSurface(SP<CWLSurfaceResource>, double, double, double scale = 1.0);
-    void                            damageWindow(PHLWINDOW, bool forceFull = false);
-    void                            damageBox(CBox*);
-    void                            damageBox(const int& x, const int& y, const int& w, const int& h);
-    void                            damageRegion(const CRegion&);
-    void                            damageMonitor(CMonitor*);
-    void                            damageMirrorsWith(CMonitor*, const CRegion&);
-    bool                            applyMonitorRule(CMonitor*, SMonitorRule*, bool force = false);
-    bool                            shouldRenderWindow(PHLWINDOW, CMonitor*);
-    bool                            shouldRenderWindow(PHLWINDOW);
-    void                            ensureCursorRenderingMode();
-    bool                            shouldRenderCursor();
-    void                            setCursorHidden(bool hide);
-    void                            calculateUVForSurface(PHLWINDOW, SP<CWLSurfaceResource>, bool main = false, const Vector2D& projSize = {}, bool fixMisalignedFSV1 = false);
-    std::tuple<float, float, float> getRenderTimes(CMonitor* pMonitor); // avg max min
-    void                            renderLockscreen(CMonitor* pMonitor, timespec* now, const CBox& geometry);
+    void renderMonitor(PHLMONITOR pMonitor);
+    void arrangeLayersForMonitor(const MONITORID&);
+    void damageSurface(SP<CWLSurfaceResource>, double, double, double scale = 1.0);
+    void damageWindow(PHLWINDOW, bool forceFull = false);
+    void damageBox(CBox*, bool skipFrameSchedule = false);
+    void damageBox(const int& x, const int& y, const int& w, const int& h);
+    void damageRegion(const CRegion&);
+    void damageMonitor(PHLMONITOR);
+    void damageMirrorsWith(PHLMONITOR, const CRegion&);
+    bool applyMonitorRule(PHLMONITOR, SMonitorRule*, bool force = false);
+    bool shouldRenderWindow(PHLWINDOW, PHLMONITOR);
+    bool shouldRenderWindow(PHLWINDOW);
+    void ensureCursorRenderingMode();
+    bool shouldRenderCursor();
+    void setCursorHidden(bool hide);
+    void calculateUVForSurface(PHLWINDOW, SP<CWLSurfaceResource>, PHLMONITOR pMonitor, bool main = false, const Vector2D& projSize = {}, const Vector2D& projSizeUnscaled = {},
+                               bool fixMisalignedFSV1 = false);
+    std::tuple<float, float, float> getRenderTimes(PHLMONITOR pMonitor); // avg max min
+    void                            renderLockscreen(PHLMONITOR pMonitor, timespec* now, const CBox& geometry);
     void                            setOccludedForBackLayers(CRegion& region, PHLWORKSPACE pWorkspace);
     void                            setOccludedForMainWorkspace(CRegion& region, PHLWORKSPACE pWorkspace); // TODO: merge occlusion methods
-    bool                            canSkipBackBufferClear(CMonitor* pMonitor);
-    void                            recheckSolitaryForMonitor(CMonitor* pMonitor);
+    bool                            canSkipBackBufferClear(PHLMONITOR pMonitor);
+    void                            recheckSolitaryForMonitor(PHLMONITOR pMonitor);
     void                            setCursorSurface(SP<CWLSurface> surf, int hotspotX, int hotspotY, bool force = false);
     void                            setCursorFromName(const std::string& name, bool force = false);
     void                            onRenderbufferDestroy(CRenderbuffer* rb);
-    CRenderbuffer*                  getCurrentRBO();
+    SP<CRenderbuffer>               getCurrentRBO();
     bool                            isNvidia();
     void                            makeEGLCurrent();
     void                            unsetEGL();
+    SExplicitSyncSettings           getExplicitSyncSettings();
+    void                            addWindowToRenderUnfocused(PHLWINDOW window);
 
     // if RENDER_MODE_NORMAL, provided damage will be written to.
     // otherwise, it will be the one used.
-    bool beginRender(CMonitor* pMonitor, CRegion& damage, eRenderMode mode = RENDER_MODE_NORMAL, SP<IWLBuffer> buffer = {}, CFramebuffer* fb = nullptr, bool simple = false);
+    bool beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMode mode = RENDER_MODE_NORMAL, SP<IHLBuffer> buffer = {}, CFramebuffer* fb = nullptr, bool simple = false);
     void endRender();
 
     bool m_bBlockSurfaceFeedback = false;
     bool m_bRenderingSnapshot    = false;
-    PHLWINDOWREF m_pLastScanout;
-    CMonitor*    m_pMostHzMonitor        = nullptr;
-    bool         m_bDirectScanoutBlocked = false;
+    PHLMONITORREF m_pMostHzMonitor;
+    bool          m_bDirectScanoutBlocked = false;
 
     DAMAGETRACKINGMODES
     damageTrackingModeFromStr(const std::string&);
 
-    bool             attemptDirectScanout(CMonitor*);
-    void             setWindowScanoutMode(PHLWINDOW);
-    void             initiateManualCrash();
+    void                                setSurfaceScanoutMode(SP<CWLSurfaceResource> surface, PHLMONITOR monitor); // nullptr monitor resets
+    void                                initiateManualCrash();
 
-    bool             m_bCrashingInProgress = false;
-    float            m_fCrashingDistort    = 0.5f;
-    wl_event_source* m_pCrashingLoop       = nullptr;
-    wl_event_source* m_pCursorTicker       = nullptr;
+    bool                                m_bCrashingInProgress = false;
+    float                               m_fCrashingDistort    = 0.5f;
+    wl_event_source*                    m_pCrashingLoop       = nullptr;
+    wl_event_source*                    m_pCursorTicker       = nullptr;
 
-    CTimer           m_tRenderTimer;
+    CTimer                              m_tRenderTimer;
+
+    std::vector<SP<CWLSurfaceResource>> explicitPresented;
 
     struct {
         int                           hotspotX;
@@ -107,26 +115,28 @@ class CHyprRenderer {
     } m_sLastCursorData;
 
   private:
-    void           arrangeLayerArray(CMonitor*, const std::vector<PHLLSREF>&, bool, CBox*);
-    void           renderWorkspaceWindowsFullscreen(CMonitor*, PHLWORKSPACE, timespec*); // renders workspace windows (fullscreen) (tiled, floating, pinned, but no special)
-    void           renderWorkspaceWindows(CMonitor*, PHLWORKSPACE, timespec*);           // renders workspace windows (no fullscreen) (tiled, floating, pinned, but no special)
-    void           renderWindow(PHLWINDOW, CMonitor*, timespec*, bool, eRenderPassMode, bool ignorePosition = false, bool ignoreAllGeometry = false);
-    void           renderLayer(PHLLS, CMonitor*, timespec*, bool popups = false);
-    void           renderSessionLockSurface(SSessionLockSurface*, CMonitor*, timespec*);
-    void           renderDragIcon(CMonitor*, timespec*);
-    void           renderIMEPopup(CInputPopup*, CMonitor*, timespec*);
-    void           renderWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now, const CBox& geometry);
-    void           sendFrameEventsToWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now); // sends frame displayed events but doesn't actually render anything
-    void           renderAllClientsForWorkspace(CMonitor* pMonitor, PHLWORKSPACE pWorkspace, timespec* now, const Vector2D& translate = {0, 0}, const float& scale = 1.f);
+    void              arrangeLayerArray(PHLMONITOR, const std::vector<PHLLSREF>&, bool, CBox*);
+    void              renderWorkspaceWindowsFullscreen(PHLMONITOR, PHLWORKSPACE, timespec*); // renders workspace windows (fullscreen) (tiled, floating, pinned, but no special)
+    void              renderWorkspaceWindows(PHLMONITOR, PHLWORKSPACE, timespec*);           // renders workspace windows (no fullscreen) (tiled, floating, pinned, but no special)
+    void              renderWindow(PHLWINDOW, PHLMONITOR, timespec*, bool, eRenderPassMode, bool ignorePosition = false, bool ignoreAllGeometry = false);
+    void              renderLayer(PHLLS, PHLMONITOR, timespec*, bool popups = false);
+    void              renderSessionLockSurface(SSessionLockSurface*, PHLMONITOR, timespec*);
+    void              renderDragIcon(PHLMONITOR, timespec*);
+    void              renderIMEPopup(CInputPopup*, PHLMONITOR, timespec*);
+    void              renderWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, timespec* now, const CBox& geometry);
+    void              sendFrameEventsToWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, timespec* now); // sends frame displayed events but doesn't actually render anything
+    void              renderAllClientsForWorkspace(PHLMONITOR pMonitor, PHLWORKSPACE pWorkspace, timespec* now, const Vector2D& translate = {0, 0}, const float& scale = 1.f);
+    void              renderSessionLockMissing(PHLMONITOR pMonitor);
 
-    bool           m_bCursorHidden        = false;
-    bool           m_bCursorHasSurface    = false;
-    CRenderbuffer* m_pCurrentRenderbuffer = nullptr;
-    wlr_buffer*    m_pCurrentWlrBuffer    = nullptr;
-    WP<IWLBuffer>  m_pCurrentHLBuffer     = {};
-    eRenderMode    m_eRenderMode          = RENDER_MODE_NORMAL;
+    bool              commitPendingAndDoExplicitSync(PHLMONITOR pMonitor);
 
-    bool           m_bNvidia = false;
+    bool              m_bCursorHidden        = false;
+    bool              m_bCursorHasSurface    = false;
+    SP<CRenderbuffer> m_pCurrentRenderbuffer = nullptr;
+    SP<Aquamarine::IBuffer> m_pCurrentBuffer;
+    eRenderMode             m_eRenderMode = RENDER_MODE_NORMAL;
+
+    bool                    m_bNvidia = false;
 
     struct {
         bool hiddenOnTouch    = false;
@@ -134,14 +144,16 @@ class CHyprRenderer {
         bool hiddenOnKeyboard = false;
     } m_sCursorHiddenConditions;
 
-    CRenderbuffer*                              getOrCreateRenderbuffer(wlr_buffer* buffer, uint32_t fmt);
-    CRenderbuffer*                              getOrCreateRenderbuffer(SP<IWLBuffer> buffer, uint32_t fmt);
-    std::vector<std::unique_ptr<CRenderbuffer>> m_vRenderbuffers;
+    SP<CRenderbuffer>              getOrCreateRenderbuffer(SP<Aquamarine::IBuffer> buffer, uint32_t fmt);
+    std::vector<SP<CRenderbuffer>> m_vRenderbuffers;
+    std::vector<PHLWINDOWREF>      m_vRenderUnfocused;
+    SP<CEventLoopTimer>            m_tRenderUnfocusedTimer;
 
     friend class CHyprOpenGLImpl;
-    friend class CToplevelExportProtocolManager;
+    friend class CToplevelExportFrame;
     friend class CInputManager;
     friend class CPointerManager;
+    friend class CMonitor;
 };
 
 inline std::unique_ptr<CHyprRenderer> g_pHyprRenderer;

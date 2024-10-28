@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 enum eHeadersErrors {
     HEADERS_OK = 0,
@@ -58,15 +59,17 @@ class CPluginManager {
 
     bool                   hasDeps();
 
-    bool                   m_bVerbose = false;
+    bool                   m_bVerbose   = false;
+    bool                   m_bNoShallow = false;
 
     // will delete recursively if exists!!
     bool createSafeDirectory(const std::string& path);
 
   private:
     std::string headerError(const eHeadersErrors err);
+    std::string headerErrorShort(const eHeadersErrors err);
 
-    std::string m_szWorkingPluginDirectory = "";
+    std::string m_szWorkingPluginDirectory;
 };
 
 inline std::unique_ptr<CPluginManager> g_pPluginManager;

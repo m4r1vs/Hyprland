@@ -24,7 +24,10 @@
 
 #define STRVAL_EMPTY "[[EMPTY]]"
 
-#define WORKSPACE_INVALID -1L
+#define WORKSPACE_INVALID     -1L
+#define WORKSPACE_NOT_CHANGED -101
+
+#define MONITOR_INVALID -1L
 
 #define LISTENER(name)                                                                                                                                                             \
     void               listener_##name(wl_listener*, void*);                                                                                                                       \
@@ -39,8 +42,7 @@
 
 #define STICKS(a, b) abs((a) - (b)) < 2
 
-#define HYPRATOM(name)                                                                                                                                                             \
-    { name, 0 }
+#define HYPRATOM(name) {name, 0}
 
 #define RASSERT(expr, reason, ...)                                                                                                                                                 \
     if (!(expr)) {                                                                                                                                                                 \
@@ -97,4 +99,16 @@
             Debug::log(ERR, "[GLES] Error in call at {}@{}: 0x{:x}", __LINE__,                                                                                                     \
                        ([]() constexpr -> std::string { return std::string(__FILE__).substr(std::string(__FILE__).find_last_of('/') + 1); })(), err);                              \
         }                                                                                                                                                                          \
+    }
+
+#define HYPRUTILS_FORWARD(ns, name)                                                                                                                                                \
+    namespace Hyprutils {                                                                                                                                                          \
+        namespace ns {                                                                                                                                                             \
+            class name;                                                                                                                                                            \
+        }                                                                                                                                                                          \
+    }
+
+#define AQUAMARINE_FORWARD(name)                                                                                                                                                   \
+    namespace Aquamarine {                                                                                                                                                         \
+        class name;                                                                                                                                                                \
     }

@@ -4,10 +4,10 @@
 #include <vector>
 #include <cstdint>
 #include <optional>
+#include <hyprutils/math/Edges.hpp>
 #include "WaylandProtocol.hpp"
 #include "xdg-shell.hpp"
-#include "../helpers/Vector2D.hpp"
-#include "../helpers/Box.hpp"
+#include "../helpers/math/Math.hpp"
 #include "../helpers/signal/Signal.hpp"
 #include "types/SurfaceRole.hpp"
 
@@ -18,23 +18,27 @@ class CXDGToplevelResource;
 class CXDGPopupResource;
 class CSeatGrab;
 class CWLSurfaceResource;
+class CXDGDialogV1Resource;
 
 struct SXDGPositionerState {
-    Vector2D             requestedSize;
-    CBox                 anchorRect;
-    xdgPositionerAnchor  anchor               = XDG_POSITIONER_ANCHOR_NONE;
-    xdgPositionerGravity gravity              = XDG_POSITIONER_GRAVITY_NONE;
-    uint32_t             constraintAdjustment = 0;
-    Vector2D             offset;
-    bool                 reactive = false;
-    Vector2D             parentSize;
+    Vector2D requestedSize;
+    CBox     anchorRect;
+    CEdges   anchor;
+    CEdges   gravity;
+    uint32_t constraintAdjustment = 0;
+    Vector2D offset;
+    bool     reactive = false;
+    Vector2D parentSize;
+
+    void     setAnchor(xdgPositionerAnchor edges);
+    void     setGravity(xdgPositionerGravity edges);
 };
 
 class CXDGPositionerRules {
   public:
     CXDGPositionerRules(SP<CXDGPositionerResource> positioner);
 
-    CBox getPosition(const CBox& constraint, const Vector2D& parentPos);
+    CBox getPosition(CBox constraint, const Vector2D& parentPos);
 
   private:
     SXDGPositionerState state;
@@ -131,21 +135,35 @@ class CXDGToplevelResource {
         Vector2D maxSize = {1337420, 694200};
     } pending, current;
 
-    WP<CXDGToplevelResource> parent;
+    WP<CXDGToplevelResource>              parent;
+    WP<CXDGDialogV1Resource>              dialog;
+
+    bool                                  anyChildModal();
+
+    std::vector<WP<CXDGToplevelResource>> children;
 
   private:
     SP<CXdgToplevel> resource;
     void             applyState();
 };
 
-class CXDGSurfaceResource : public ISurfaceRole {
+class CXDGSurfaceRole : public ISurfaceRole {
+  public:
+    CXDGSurfaceRole(SP<CXDGSurfaceResource> xdg);
+
+    virtual eSurfaceRole role() {
+        return SURFACE_ROLE_XDG_SHELL;
+    }
+
+    WP<CXDGSurfaceResource> xdgSurface;
+};
+
+class CXDGSurfaceResource {
   public:
     CXDGSurfaceResource(SP<CXdgSurface> resource_, SP<CXDGWMBase> owner_, SP<CWLSurfaceResource> surface_);
     ~CXDGSurfaceResource();
 
     static SP<CXDGSurfaceResource> fromResource(wl_resource*);
-
-    virtual eSurfaceRole           role();
 
     bool                           good();
 

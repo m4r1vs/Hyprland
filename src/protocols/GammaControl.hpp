@@ -14,16 +14,16 @@ class CGammaControl {
     CGammaControl(SP<CZwlrGammaControlV1> resource_, wl_resource* output);
     ~CGammaControl();
 
-    bool      good();
-    void      applyToMonitor();
-    CMonitor* getMonitor();
+    bool       good();
+    void       applyToMonitor();
+    PHLMONITOR getMonitor();
 
   private:
     SP<CZwlrGammaControlV1> resource;
-    CMonitor*               pMonitor      = nullptr;
+    PHLMONITORREF           pMonitor;
     size_t                  gammaSize     = 0;
     bool                    gammaTableSet = false;
-    std::vector<uint16_t>   gammaTable;
+    std::vector<uint16_t>   gammaTable; // [r,g,b]+
 
     void                    onMonitorDestroy();
 
@@ -39,7 +39,7 @@ class CGammaControlProtocol : public IWaylandProtocol {
 
     virtual void bindManager(wl_client* client, void* data, uint32_t ver, uint32_t id);
 
-    void         applyGammaToState(CMonitor* pMonitor);
+    void         applyGammaToState(PHLMONITOR pMonitor);
 
   private:
     void onManagerResourceDestroy(wl_resource* res);

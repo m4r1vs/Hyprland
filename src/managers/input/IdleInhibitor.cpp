@@ -7,7 +7,7 @@ void CInputManager::newIdleInhibitor(std::any inhibitor) {
     const auto PINHIBIT = m_vIdleInhibitors.emplace_back(std::make_unique<SIdleInhibitor>()).get();
     PINHIBIT->inhibitor = std::any_cast<SP<CIdleInhibitor>>(inhibitor);
 
-    Debug::log(LOG, "New idle inhibitor registered for surface {:x}", (uintptr_t)PINHIBIT->inhibitor->surface);
+    Debug::log(LOG, "New idle inhibitor registered for surface {:x}", (uintptr_t)PINHIBIT->inhibitor->surface.get());
 
     PINHIBIT->inhibitor->listeners.destroy = PINHIBIT->inhibitor->resource->events.destroy.registerListener([this, PINHIBIT](std::any data) {
         std::erase_if(m_vIdleInhibitors, [PINHIBIT](const auto& other) { return other.get() == PINHIBIT; });
@@ -31,7 +31,7 @@ void CInputManager::newIdleInhibitor(std::any inhibitor) {
 
 void CInputManager::recheckIdleInhibitorStatus() {
 
-    for (auto& ii : m_vIdleInhibitors) {
+    for (auto const& ii : m_vIdleInhibitors) {
         if (ii->nonDesktop) {
             PROTO::idle->setInhibit(true);
             return;
@@ -49,7 +49,7 @@ void CInputManager::recheckIdleInhibitorStatus() {
     }
 
     // check manual user-set inhibitors
-    for (auto& w : g_pCompositor->m_vWindows) {
+    for (auto const& w : g_pCompositor->m_vWindows) {
         if (w->m_eIdleInhibitMode == IDLEINHIBIT_NONE)
             continue;
 
@@ -63,7 +63,7 @@ void CInputManager::recheckIdleInhibitorStatus() {
             return;
         }
 
-        if (w->m_eIdleInhibitMode == IDLEINHIBIT_FULLSCREEN && w->m_bIsFullscreen && g_pCompositor->isWorkspaceVisible(w->m_pWorkspace)) {
+        if (w->m_eIdleInhibitMode == IDLEINHIBIT_FULLSCREEN && w->isFullscreen() && g_pCompositor->isWorkspaceVisible(w->m_pWorkspace)) {
             PROTO::idle->setInhibit(true);
             return;
         }

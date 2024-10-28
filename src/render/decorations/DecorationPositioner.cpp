@@ -33,11 +33,11 @@ Vector2D CDecorationPositioner::getEdgeDefinedPoint(uint32_t edges, PHLWINDOW pW
 
     if (EDGESNO == 1) {
         if (TOP)
-            return wb.pos() + Vector2D{wb.size().x / 2.0, 0};
+            return wb.pos() + Vector2D{wb.size().x / 2.0, 0.0};
         else if (BOTTOM)
             return wb.pos() + Vector2D{wb.size().x / 2.0, wb.size().y};
         else if (LEFT)
-            return wb.pos() + Vector2D{0, wb.size().y / 2.0};
+            return wb.pos() + Vector2D{0.0, wb.size().y / 2.0};
         else if (RIGHT)
             return wb.pos() + Vector2D{wb.size().x, wb.size().y / 2.0};
         UNREACHABLE();
@@ -45,11 +45,11 @@ Vector2D CDecorationPositioner::getEdgeDefinedPoint(uint32_t edges, PHLWINDOW pW
         if (TOP && LEFT)
             return wb.pos();
         if (TOP && RIGHT)
-            return wb.pos() + Vector2D{wb.size().x, 0};
+            return wb.pos() + Vector2D{wb.size().x, 0.0};
         if (BOTTOM && RIGHT)
             return wb.pos() + wb.size();
         if (BOTTOM && LEFT)
-            return wb.pos() + Vector2D{0, wb.size().y};
+            return wb.pos() + Vector2D{0.0, wb.size().y};
         UNREACHABLE();
     }
     UNREACHABLE();
@@ -125,7 +125,7 @@ void CDecorationPositioner::onWindowUpdate(PHLWINDOW pWindow) {
 
     //
     std::vector<CDecorationPositioner::SWindowPositioningData*> datas;
-    for (auto& wd : pWindow->m_dWindowDecorations) {
+    for (auto const& wd : pWindow->m_dWindowDecorations) {
         datas.push_back(getDataFor(wd.get(), pWindow));
     }
 
@@ -234,26 +234,26 @@ void CDecorationPositioner::onWindowUpdate(PHLWINDOW pWindow) {
             } else if (LEFT) {
                 pos = wb.pos() - EDGEPOINT - Vector2D{stickyOffsetXL, -stickyOffsetYT};
                 pos.x -= desiredSize;
-                size = {desiredSize, wb.size().y + stickyOffsetYB + stickyOffsetYT};
+                size = {(double)desiredSize, wb.size().y + stickyOffsetYB + stickyOffsetYT};
 
                 if (SOLID)
                     stickyOffsetXL += desiredSize;
             } else if (RIGHT) {
-                pos  = wb.pos() + Vector2D{wb.size().x, 0} - EDGEPOINT + Vector2D{stickyOffsetXR, -stickyOffsetYT};
-                size = {desiredSize, wb.size().y + stickyOffsetYB + stickyOffsetYT};
+                pos  = wb.pos() + Vector2D{wb.size().x, 0.0} - EDGEPOINT + Vector2D{stickyOffsetXR, -stickyOffsetYT};
+                size = {(double)desiredSize, wb.size().y + stickyOffsetYB + stickyOffsetYT};
 
                 if (SOLID)
                     stickyOffsetXR += desiredSize;
             } else if (TOP) {
                 pos = wb.pos() - EDGEPOINT - Vector2D{stickyOffsetXL, stickyOffsetYT};
                 pos.y -= desiredSize;
-                size = {wb.size().x + stickyOffsetXL + stickyOffsetXR, desiredSize};
+                size = {wb.size().x + stickyOffsetXL + stickyOffsetXR, (double)desiredSize};
 
                 if (SOLID)
                     stickyOffsetYT += desiredSize;
             } else {
-                pos  = wb.pos() + Vector2D{0, wb.size().y} - EDGEPOINT - Vector2D{stickyOffsetXL, stickyOffsetYB};
-                size = {wb.size().x + stickyOffsetXL + stickyOffsetXR, desiredSize};
+                pos  = wb.pos() + Vector2D{0.0, wb.size().y} - EDGEPOINT - Vector2D{stickyOffsetXL, stickyOffsetYB};
+                size = {wb.size().x + stickyOffsetXL + stickyOffsetXR, (double)desiredSize};
 
                 if (SOLID)
                     stickyOffsetYB += desiredSize;
@@ -271,7 +271,7 @@ void CDecorationPositioner::onWindowUpdate(PHLWINDOW pWindow) {
         }
     }
 
-    if (WINDOWDATA->extents != SWindowDecorationExtents{{stickyOffsetXL + reservedXL, stickyOffsetYT + reservedYT}, {stickyOffsetXR + reservedXR, stickyOffsetYB + reservedYB}}) {
+    if (WINDOWDATA->extents != SBoxExtents{{stickyOffsetXL + reservedXL, stickyOffsetYT + reservedYT}, {stickyOffsetXR + reservedXR, stickyOffsetYB + reservedYB}}) {
         WINDOWDATA->extents = {{stickyOffsetXL + reservedXL, stickyOffsetYT + reservedYT}, {stickyOffsetXR + reservedXR, stickyOffsetYB + reservedYB}};
         g_pLayoutManager->getCurrentLayout()->recalculateWindow(pWindow);
     }
@@ -286,58 +286,66 @@ void CDecorationPositioner::onWindowMap(PHLWINDOW pWindow) {
     m_mWindowDatas[pWindow] = {};
 }
 
-SWindowDecorationExtents CDecorationPositioner::getWindowDecorationReserved(PHLWINDOW pWindow) {
+SBoxExtents CDecorationPositioner::getWindowDecorationReserved(PHLWINDOW pWindow) {
     try {
         const auto E = m_mWindowDatas.at(pWindow);
         return E.reserved;
     } catch (std::out_of_range& e) { return {}; }
 }
 
-SWindowDecorationExtents CDecorationPositioner::getWindowDecorationExtents(PHLWINDOW pWindow, bool inputOnly) {
-    CBox accum = pWindow->getWindowMainSurfaceBox();
+SBoxExtents CDecorationPositioner::getWindowDecorationExtents(PHLWINDOW pWindow, bool inputOnly) {
+    CBox const mainSurfaceBox = pWindow->getWindowMainSurfaceBox();
+    CBox       accum          = mainSurfaceBox;
 
-    for (auto& data : m_vWindowPositioningDatas) {
-        if (data->pWindow.lock() != pWindow)
+    for (auto const& data : m_vWindowPositioningDatas) {
+        if (!data->pDecoration || (inputOnly && !(data->pDecoration->getDecorationFlags() & DECORATION_ALLOWS_MOUSE_INPUT)))
             continue;
 
-        if (!data->pWindow.lock() || !data->pDecoration)
-            continue;
-
-        if (!(data->pDecoration->getDecorationFlags() & DECORATION_ALLOWS_MOUSE_INPUT) && inputOnly)
+        auto const window = data->pWindow.lock();
+        if (!window || window != pWindow)
             continue;
 
         CBox decoBox;
-
         if (data->positioningInfo.policy == DECORATION_POSITION_ABSOLUTE) {
-            decoBox = data->pWindow->getWindowMainSurfaceBox();
+            decoBox = mainSurfaceBox;
             decoBox.addExtents(data->positioningInfo.desiredExtents);
         } else {
-            decoBox              = data->lastReply.assignedGeometry;
-            const auto EDGEPOINT = getEdgeDefinedPoint(data->positioningInfo.edges, pWindow);
-            decoBox.translate(EDGEPOINT);
+            decoBox = data->lastReply.assignedGeometry;
+            decoBox.translate(getEdgeDefinedPoint(data->positioningInfo.edges, pWindow));
         }
 
-        SWindowDecorationExtents extentsToAdd;
+        // Check bounds only if decoBox extends beyond accum
+        SBoxExtents extentsToAdd;
+        bool        needUpdate = false;
 
-        if (decoBox.x < accum.x)
+        if (decoBox.x < accum.x) {
             extentsToAdd.topLeft.x = accum.x - decoBox.x;
-        if (decoBox.y < accum.y)
+            needUpdate             = true;
+        }
+        if (decoBox.y < accum.y) {
             extentsToAdd.topLeft.y = accum.y - decoBox.y;
-        if (decoBox.x + decoBox.w > accum.x + accum.w)
+            needUpdate             = true;
+        }
+        if (decoBox.x + decoBox.w > accum.x + accum.w) {
             extentsToAdd.bottomRight.x = (decoBox.x + decoBox.w) - (accum.x + accum.w);
-        if (decoBox.y + decoBox.h > accum.y + accum.h)
+            needUpdate                 = true;
+        }
+        if (decoBox.y + decoBox.h > accum.y + accum.h) {
             extentsToAdd.bottomRight.y = (decoBox.y + decoBox.h) - (accum.y + accum.h);
+            needUpdate                 = true;
+        }
 
-        accum.addExtents(extentsToAdd);
+        if (needUpdate)
+            accum.addExtents(extentsToAdd);
     }
 
-    return accum.extentsFrom(pWindow->getWindowMainSurfaceBox());
+    return accum.extentsFrom(mainSurfaceBox);
 }
 
 CBox CDecorationPositioner::getBoxWithIncludedDecos(PHLWINDOW pWindow) {
     CBox accum = pWindow->getWindowMainSurfaceBox();
 
-    for (auto& data : m_vWindowPositioningDatas) {
+    for (auto const& data : m_vWindowPositioningDatas) {
         if (data->pWindow.lock() != pWindow)
             continue;
 
@@ -355,7 +363,7 @@ CBox CDecorationPositioner::getBoxWithIncludedDecos(PHLWINDOW pWindow) {
             decoBox.translate(EDGEPOINT);
         }
 
-        SWindowDecorationExtents extentsToAdd;
+        SBoxExtents extentsToAdd;
 
         if (decoBox.x < accum.x)
             extentsToAdd.topLeft.x = accum.x - decoBox.x;
@@ -373,9 +381,10 @@ CBox CDecorationPositioner::getBoxWithIncludedDecos(PHLWINDOW pWindow) {
 }
 
 CBox CDecorationPositioner::getWindowDecorationBox(IHyprWindowDecoration* deco) {
-    const auto DATA = getDataFor(deco, deco->m_pWindow.lock());
+    auto const window = deco->m_pWindow.lock();
+    const auto DATA   = getDataFor(deco, window);
 
     CBox       box = DATA->lastReply.assignedGeometry;
-    box.translate(getEdgeDefinedPoint(DATA->positioningInfo.edges, deco->m_pWindow.lock()));
+    box.translate(getEdgeDefinedPoint(DATA->positioningInfo.edges, window));
     return box;
 }
